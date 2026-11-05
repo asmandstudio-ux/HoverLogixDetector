@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.HoverLogix" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">#FF6A00</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:windowBackground">#111111</item>
+    </style>
+</resources>
