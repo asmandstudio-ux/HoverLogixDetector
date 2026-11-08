@@ -19,4 +19,4 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r pallet_safety/requirements.txt pytest
-      - run: pytest -q tests
+      - run: python -m pytest -q tests
