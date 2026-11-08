@@ -1,0 +1,10 @@
+# YOLO dataset config. Put the 984 photos in dataset/images/ (same file names as labels/, see README).
+path: .
+train: images
+val: images
+names:
+  0: pallet
+  1: pallet_label
+  2: location_label
+  3: beam
+  4: upright

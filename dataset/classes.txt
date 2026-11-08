@@ -1,0 +1,5 @@
+pallet
+pallet_label
+location_label
+beam
+upright

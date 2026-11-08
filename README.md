@@ -1,4 +1,19 @@
-# HoverLogix Detect (Android)
+# HoverLogixDetector
+
+Warehouse detection and pallet safety for Hover Logix / DroneIMS. Start with **[docs/INTEGRATION.md](docs/INTEGRATION.md)**.
+
+| Folder | What |
+|---|---|
+| `models/` | YOLO26n detector v1 (pallet, pallet_label, location_label, beam, upright): `.pt`, `.onnx` |
+| `dataset/` | 984 YOLO label files + status, the images are on Finney's Mac |
+| `training/` | train, auto-label and export scripts |
+| `pallet_safety/` | Python library + CLI: straight-box lean check for pallets and pallet stacks |
+| `web/pallet-lean-check/` | browser tool to check photos and correct results |
+| `app/` (this README below) | Android app: live / video detection, correction editor, APK built by GitHub Actions |
+
+---
+
+## HoverLogix Detect (Android app)
 
 On-device detection of **pallets, pallet labels, location labels, beams and uprights**
 from the live camera or a recorded video, with a correction editor that saves

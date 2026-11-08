@@ -1,0 +1,1208 @@
+<title>Pallet Lean Check</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one working bench. Photo with measurement overlay on the left, inspector on the right,
+   photo strip below. Stacks to one column on phones. */
+:root {
+  --bg: #e9edf1;
+  --surface: #ffffff;
+  --surface-2: #f3f6f8;
+  --ink: #15202a;
+  --muted: #5a6876;
+  --line: #d2d9e0;
+  --accent: #e35d10;
+  --accent-ink: #ffffff;
+  --ok: #1d8049;
+  --warn: #a86f00;
+  --bad: #c62828;
+  --ok-bg: #e2f3e8;
+  --warn-bg: #fbf0d6;
+  --bad-bg: #fbe3e1;
+  --stage: #1a222b;
+  --focus: #1f6feb;
+  --font-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f151b; --surface: #17202a; --surface-2: #1d2833; --ink: #e5ecf2; --muted: #93a2b1;
+    --line: #2b3742; --accent: #ff7a2e; --accent-ink: #1a0d04; --ok: #44c27a; --warn: #e7b123; --bad: #ff6a5e;
+    --ok-bg: #12321f; --warn-bg: #3a2c09; --bad-bg: #3d1513; --stage: #0b0f13; --focus: #58a6ff;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f151b; --surface: #17202a; --surface-2: #1d2833; --ink: #e5ecf2; --muted: #93a2b1;
+  --line: #2b3742; --accent: #ff7a2e; --accent-ink: #1a0d04; --ok: #44c27a; --warn: #e7b123; --bad: #ff6a5e;
+  --ok-bg: #12321f; --warn-bg: #3a2c09; --bad-bg: #3d1513; --stage: #0b0f13; --focus: #58a6ff;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.45;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 16px 32px;
+}
+button, select, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.wrap { max-width: 1360px; margin: 0 auto; display: grid; gap: 14px; }
+
+/* Header */
+.top { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 20px; justify-content: space-between; }
+.brand { display: grid; gap: 2px; min-width: 0; }
+.eyebrow { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+h1 { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: clamp(28px, 4vw, 40px); line-height: 1; letter-spacing: .01em; text-wrap: balance; }
+.status { font-size: 13px; color: var(--muted); }
+.status b { color: var(--ink); font-weight: 600; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 8px 14px; font-weight: 500; display: inline-flex; gap: 8px; align-items: center; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.05); }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.btn.small { padding: 5px 10px; font-size: 13px; }
+.btn.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.upload { position: relative; overflow: hidden; }
+.upload input[type=file] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 100px; }
+
+/* Threshold bar */
+.rules { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 14px; }
+.rule { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.rule label { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.rule input[type=range] { width: 130px; accent-color: var(--accent); }
+.rule output { font-family: var(--font-mono); font-size: 13px; min-width: 3.5em; font-variant-numeric: tabular-nums; }
+.rule select { border: 1px solid var(--line); background: var(--surface-2); border-radius: 6px; padding: 4px 8px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+/* Bench */
+.bench { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+@media (max-width: 900px) { .bench { grid-template-columns: minmax(0, 1fr); } }
+.stage { background: var(--stage); border-radius: var(--r); overflow: hidden; display: grid; }
+.stagebar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; padding: 10px 12px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.stagebar .name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.refctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+.refctl select { border: 1px solid var(--line); background: var(--surface-2); border-radius: 6px; padding: 4px 8px; }
+.refctl input[type=range] { width: 110px; accent-color: var(--accent); }
+.refctl output { font-family: var(--font-mono); color: var(--ink); font-variant-numeric: tabular-nums; }
+.canvaswrap { position: relative; display: grid; place-items: center; min-height: 320px; padding: 10px; touch-action: none; }
+#view { display: block; max-width: 100%; touch-action: none; cursor: crosshair; }
+#view.grab { cursor: grabbing; }
+.overlaymsg { position: absolute; inset: 0; display: grid; place-items: center; color: #dfe6ec; font-size: 15px; text-align: center; padding: 24px; pointer-events: none; }
+.overlaymsg[hidden] { display: none !important; }
+.stagefoot { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; padding: 8px 12px; background: var(--surface); border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 18px; height: 0; border-top: 3px solid; display: inline-block; }
+.sw.dash { border-top-style: dashed; }
+
+/* Inspector */
+.inspector { display: grid; gap: 12px; min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.panel h2 { margin: 0; font-family: var(--font-display); font-weight: 600; font-size: 20px; letter-spacing: .02em; }
+.muted { color: var(--muted); }
+.counts { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; letter-spacing: .03em; white-space: nowrap; }
+.chip.ok { background: var(--ok-bg); color: var(--ok); }
+.chip.check { background: var(--warn-bg); color: var(--warn); }
+.chip.unsafe { background: var(--bad-bg); color: var(--bad); }
+.chip.na { background: var(--surface-2); color: var(--muted); }
+.plist { display: grid; gap: 6px; max-height: 260px; overflow: auto; }
+.pitem { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; text-align: left; border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; padding: 8px 10px; }
+.pitem.sel { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.pitem .n { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.pitem .m { font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+.pitem .you { font-size: 11.5px; color: var(--muted); }
+.verdict { display: grid; gap: 4px; }
+.verdict .big { font-family: var(--font-display); font-weight: 700; font-size: 34px; line-height: 1; letter-spacing: .02em; }
+.verdict .big.ok { color: var(--ok); } .verdict .big.check { color: var(--warn); } .verdict .big.unsafe { color: var(--bad); } .verdict .big.na { color: var(--muted); }
+.kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; font-size: 13px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.seg { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface-2); padding: 8px 2px; font-size: 12px; line-height: 1.2; font-weight: 500; border-left: 1px solid var(--line); }
+.seg button:first-child { border-left: 0; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.note { font-size: 12.5px; color: var(--muted); }
+.note.warn { color: var(--warn); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; }
+.stackbox { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
+.stackhead { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
+.levels { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.levels th { text-align: left; font-weight: 500; color: var(--muted); padding: 3px 4px; border-bottom: 1px solid var(--line); }
+.levels td { padding: 4px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--line); }
+.levels td:first-child { font-family: var(--font-body); }
+.sitem { border-style: dashed; }
+.stats { display: grid; gap: 6px; font-size: 13px; }
+.stats .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* Strip */
+.strip { display: grid; gap: 8px; }
+.striphead { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.striphead h2 { margin: 0; font-family: var(--font-display); font-weight: 600; font-size: 20px; }
+.thumbs { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; }
+.thumb { flex: 0 0 auto; width: 112px; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 4px; display: grid; gap: 4px; text-align: left; position: relative; }
+.thumb.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.thumb img, .thumb .ph { width: 100%; height: 130px; object-fit: cover; border-radius: 5px; background: var(--surface-2); display: block; }
+.thumb .t { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.thumb .badges { display: flex; gap: 3px; flex-wrap: wrap; }
+.thumb .badges .chip { padding: 1px 6px; font-size: 10.5px; }
+.tag { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.65); color: #fff; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; }
+.confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 20; max-width: calc(100% - 32px); }
+@media (prefers-reduced-motion: no-preference) { .toast { transition: opacity .2s; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <span class="eyebrow">Hover Logix · Pallet safety</span>
+      <h1>Pallet Lean Check</h1>
+      <span class="status" id="status">Loading the detection model…</span>
+    </div>
+    <div class="actions">
+      <span class="btn primary upload" id="uploadBtn">Upload photos<input type="file" id="fileInput" accept="image/*" multiple aria-label="Upload photos"></span>
+      <button class="btn" id="exportBtn" type="button">Download corrections</button>
+    </div>
+  </header>
+
+  <section class="rules" aria-label="Lean limits">
+    <div class="rule">
+      <span class="dot" style="background: var(--warn)"></span>
+      <label for="warnRange">Check from</label>
+      <input type="range" id="warnRange" min="0.5" max="6" step="0.1" value="2">
+      <output id="warnOut">2.0°</output>
+    </div>
+    <div class="rule">
+      <span class="dot" style="background: var(--bad)"></span>
+      <label for="unsafeRange">Unsafe from</label>
+      <input type="range" id="unsafeRange" min="1" max="12" step="0.1" value="4">
+      <output id="unsafeOut">4.0°</output>
+    </div>
+    <div class="rule">
+      <span class="dot" style="background: var(--warn)"></span>
+      <label for="sWarnRange">Outside the box: check from</label>
+      <input type="range" id="sWarnRange" min="10" max="300" step="5" value="100">
+      <output id="sWarnOut">100 mm</output>
+    </div>
+    <div class="rule">
+      <span class="dot" style="background: var(--bad)"></span>
+      <label for="sUnsafeRange">unsafe from</label>
+      <input type="range" id="sUnsafeRange" min="20" max="400" step="5" value="150">
+      <output id="sUnsafeOut">150 mm</output>
+    </div>
+    <div class="rule">
+      <label for="palletSel">Pallet width facing camera</label>
+      <select id="palletSel">
+        <option value="1200">1200 mm (Euro, long side)</option>
+        <option value="800">800 mm (Euro, short side)</option>
+        <option value="1000">1000 mm (block / industrial)</option>
+      </select>
+    </div>
+  </section>
+
+  <main class="bench">
+    <section class="stage" aria-label="Photo">
+      <div class="stagebar">
+        <span class="name" id="photoName">No photo</span>
+        <div class="refctl">
+          <label for="refMode">Vertical reference</label>
+          <select id="refMode">
+            <option value="auto">Auto (rack uprights)</option>
+            <option value="photo">Photo vertical</option>
+            <option value="manual">Manual</option>
+          </select>
+          <input type="range" id="refRange" min="-6" max="6" step="0.1" value="0" aria-label="Manual reference tilt" hidden>
+          <output id="refOut">0.0°</output>
+        </div>
+      </div>
+      <div class="canvaswrap" id="canvasWrap">
+        <canvas id="view" width="10" height="10" aria-label="Photo with pallet measurements"></canvas>
+        <div class="overlaymsg" id="stageMsg">Loading…</div>
+      </div>
+      <div class="stagefoot">
+        <div class="legend">
+          <span><i class="sw" style="border-color:#2fd27a"></i>Straight box on the pallet</span>
+          <span><i class="sw" style="border-color:#ff9f1a"></i>Pallet base</span>
+          <span><i class="sw" style="border-color:#8a97a3"></i>Load edge</span>
+          <span><i class="sw" style="border-color:#ff463c;border-top-width:8px;opacity:.6"></i>Outside the box</span>
+        </div>
+        <div class="row">
+          <button class="btn small" id="drawBtn" type="button" aria-pressed="false">Draw missing pallet</button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="inspector">
+      <div class="panel" id="photoPanel">
+        <h2>This photo</h2>
+        <div class="counts" id="photoCounts"><span class="chip na">No pallets yet</span></div>
+        <div class="plist" id="plist"></div>
+        <p class="note">Each pallet gets a straight box standing on its base. Stock that leaves the box is shaded red. Tap a pallet, then drag the round handles onto the load's corners if they are off.</p>
+      </div>
+      <div class="panel" id="detailPanel" hidden>
+        <div class="verdict">
+          <span class="eyebrow" id="dTitle">Pallet</span>
+          <span class="big" id="dBig">OK</span>
+          <span class="note" id="dAuto"></span>
+        </div>
+        <dl class="kv">
+          <dt>Lean</dt><dd id="dLean">0.0°</dd>
+          <dt>Outside the box</dt><dd id="dOffset">0 mm</dd>
+          <dt>Wider at the top</dt><dd id="dTaper">0 mm</dd>
+          <dt>Left side / right side</dt><dd id="dSides">0.0° / 0.0°</dd>
+        </dl>
+        <p class="note warn" id="dWarn" hidden></p>
+        <div class="stackbox" id="dStack" hidden>
+          <div class="eyebrow">Stack checked against one box on the bottom pallet</div>
+          <div class="stackhead"><span class="chip" id="sChip"></span><span id="sSummary"></span></div>
+          <table class="levels"><thead><tr><th>Level</th><th>Lean</th><th>Placed off centre</th><th>Top outside box</th></tr></thead><tbody id="sLevels"></tbody></table>
+          <button class="btn small" id="unstackBtn" type="button" hidden>Not stacked on the pallet below</button>
+          <button class="btn small" id="restackBtn" type="button" hidden>Treat as stacked again</button>
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom:6px">Your call</div>
+          <div class="seg" role="group" aria-label="Your verdict">
+            <button type="button" data-call="">Use result</button>
+            <button type="button" data-call="straight">Straight</button>
+            <button type="button" data-call="leaning">Leaning</button>
+            <button type="button" data-call="not_pallet">Not a pallet</button>
+          </div>
+        </div>
+        <div class="row">
+          <button class="btn small" id="resetBtn" type="button">Reset lines</button>
+          <button class="btn small" id="delBtn" type="button" hidden>Remove pallet</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Your review so far</h2>
+        <div class="stats" id="stats"><span class="muted">Mark pallets as Straight or Leaning to see how often the check agrees with you.</span></div>
+      </div>
+    </aside>
+  </main>
+
+  <section class="strip">
+    <div class="striphead">
+      <h2>Photos</h2>
+      <span class="note" id="saveNote"></span>
+    </div>
+    <div class="thumbs" id="thumbs"></div>
+  </section>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.wasm.min.js"></script>
+<script>
+"use strict";
+/* ---------------- configuration ---------------- */
+const CLS = { pallet: 0, pallet_label: 1, location_label: 2, beam: 3, upright: 4 };
+const MODEL_SIZE = 960;
+const WORK_MAX = 1600;           // photos are analysed and stored at this long side
+const ORT_CDN = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
+const COLORS = { ok: "#2fd27a", check: "#ffc53d", unsafe: "#ff5247", na: "#b8c4cf", ref: "#f2f5f7", base: "#ff9f1a", sel: "#ffffff", stack: "#5ad8ff", load: "#ffffff" };
+
+const $ = (id) => document.getElementById(id);
+const state = {
+  session: null, modelReady: false,
+  photos: [], current: null, selected: null,
+  warn: 2.0, unsafe: 4.0, palletMm: 1200, stackWarnMm: 100, stackUnsafeMm: 150,
+  db: null, assets: null, downloads: null, canSave: false,
+  drawMode: false,
+};
+
+/* ---------------- small helpers ---------------- */
+const deg = (r) => r * 180 / Math.PI;
+const rad = (d) => d * Math.PI / 180;
+const fmtDeg = (v) => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1) + "°";
+const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, 2600);
+}
+function setStatus(html) { $("status").innerHTML = html; }
+
+/* ---------------- model ---------------- */
+async function loadModel() {
+  if (!window.ort) throw new Error("runtime script did not load");
+  ort.env.wasm.numThreads = 1;
+  const local = new URL("ort-wasm-simd-threaded.wasm", document.baseURI).href;
+  const buf = await (await fetch("model-onnx.wasm")).arrayBuffer()  /* ONNX model bytes, served under a .wasm name */;
+  const attempts = [
+    { mjs: ORT_CDN + "ort-wasm-simd-threaded.mjs", wasm: local },
+    { mjs: new URL("ort-wasm-simd-threaded.mjs", document.baseURI).href, wasm: local },
+  ];
+  let lastErr;
+  for (const paths of attempts) {
+    try {
+      ort.env.wasm.wasmPaths = paths;
+      state.session = await ort.InferenceSession.create(buf, { executionProviders: ["wasm"] });
+      return;
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
+async function detect(img) {
+  const S = MODEL_SIZE, W = img.width, H = img.height;
+  const r = Math.min(S / W, S / H), nw = Math.round(W * r), nh = Math.round(H * r);
+  const px = Math.floor((S - nw) / 2), py = Math.floor((S - nh) / 2);
+  const c = document.createElement("canvas"); c.width = S; c.height = S;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.fillStyle = "rgb(114,114,114)"; g.fillRect(0, 0, S, S);
+  g.imageSmoothingQuality = "high";
+  g.drawImage(img, px, py, nw, nh);
+  const d = g.getImageData(0, 0, S, S).data, A = S * S;
+  const input = new Float32Array(3 * A);
+  for (let i = 0; i < A; i++) { input[i] = d[4 * i] / 255; input[i + A] = d[4 * i + 1] / 255; input[i + 2 * A] = d[4 * i + 2] / 255; }
+  const feeds = {}; feeds[state.session.inputNames[0]] = new ort.Tensor("float32", input, [1, 3, S, S]);
+  const out = (await state.session.run(feeds))[state.session.outputNames[0]];
+  const [, ch, n] = out.dims, y = out.data, nc = ch - 4;
+  const cands = []; let maxC = 0;
+  for (let a = 0; a < n; a++) {
+    let best = -1, bs = 0.3;
+    for (let k = 0; k < nc; k++) { const s = y[(4 + k) * n + a]; if (s > bs) { bs = s; best = k; } }
+    if (best !== CLS.pallet && best !== CLS.upright && best !== CLS.beam) continue;
+    const cx = y[a], cy = y[n + a], w = y[2 * n + a], h = y[3 * n + a];
+    maxC = Math.max(maxC, cx, cy);
+    cands.push({ cls: best, score: bs, b: [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2] });
+  }
+  const sc = maxC <= 2 ? S : 1;
+  for (const c2 of cands) {
+    c2.b = c2.b.map((v, i) => Math.min(i % 2 ? H : W, Math.max(0, ((v * sc) - (i % 2 ? py : px)) / r)));
+  }
+  const keep = [];
+  for (const cls of [CLS.pallet, CLS.upright, CLS.beam]) {
+    const list = cands.filter((q) => q.cls === cls && q.score >= (cls === CLS.pallet ? 0.45 : 0.35)).sort((p, q) => q.score - p.score);
+    while (list.length) { const b = list.shift(); keep.push(b); for (let i = list.length - 1; i >= 0; i--) if (iou(b.b, list[i].b) > 0.5) list.splice(i, 1); }
+  }
+  return keep;
+}
+function iou(a, b) {
+  const iw = Math.min(a[2], b[2]) - Math.max(a[0], b[0]), ih = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
+  if (iw <= 0 || ih <= 0) return 0;
+  const I = iw * ih; return I / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - I);
+}
+
+/* ---------------- image gradients ---------------- */
+function gradients(photo) {
+  if (photo.grad) return photo.grad;
+  const W = photo.img.width, H = photo.img.height;
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(photo.img, 0, 0, W, H);
+  const d = g.getImageData(0, 0, W, H).data, N = W * H;
+  const gray = new Float32Array(N);
+  for (let i = 0; i < N; i++) gray[i] = 0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2];
+  // 5x5 Gaussian, separable [1 4 6 4 1] / 16
+  const k = [1, 4, 6, 4, 1], tmp = new Float32Array(N), bl = new Float32Array(N);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    let s = 0; for (let j = -2; j <= 2; j++) { const xx = Math.min(W - 1, Math.max(0, x + j)); s += k[j + 2] * gray[y * W + xx]; } tmp[y * W + x] = s / 16;
+  }
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    let s = 0; for (let j = -2; j <= 2; j++) { const yy = Math.min(H - 1, Math.max(0, y + j)); s += k[j + 2] * tmp[yy * W + x]; } bl[y * W + x] = s / 16;
+  }
+  const gx = new Float32Array(N), gy = new Float32Array(N);
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    const i = y * W + x;
+    const a = bl[i - W - 1], b = bl[i - W], c3 = bl[i - W + 1], dd = bl[i - 1], f = bl[i + 1], g2 = bl[i + W - 1], h = bl[i + W], ii = bl[i + W + 1];
+    gx[i] = Math.abs((c3 + 2 * f + ii) - (a + 2 * dd + g2));
+    gy[i] = Math.abs((g2 + 2 * h + ii) - (a + 2 * b + c3));
+  }
+  photo.grad = { W, H, gx, gy };
+  return photo.grad;
+}
+
+/* Seeded random so the same photo always gives the same lines */
+function rng(seed) { let s = seed >>> 0 || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+
+function fitLine(ys, xs, tol) {
+  // x = a*y + b, RANSAC then least squares on inliers
+  const n = ys.length; if (n < 10) return null;
+  const rnd = rng(n * 7919 + Math.round(xs[0]));
+  let best = null, bestN = 0;
+  for (let it = 0; it < 300; it++) {
+    const i = Math.floor(rnd() * n), j = Math.floor(rnd() * n);
+    if (ys[i] === ys[j]) continue;
+    const a = (xs[j] - xs[i]) / (ys[j] - ys[i]), b = xs[i] - a * ys[i];
+    let cnt = 0; for (let k = 0; k < n; k++) if (Math.abs(xs[k] - (a * ys[k] + b)) < tol) cnt++;
+    if (cnt > bestN) { bestN = cnt; best = [a, b]; }
+  }
+  if (!best) return null;
+  let sy = 0, sx = 0, syy = 0, sxy = 0, m = 0;
+  for (let k = 0; k < n; k++) if (Math.abs(xs[k] - (best[0] * ys[k] + best[1])) < tol) { sy += ys[k]; sx += xs[k]; syy += ys[k] * ys[k]; sxy += ys[k] * xs[k]; m++; }
+  const den = m * syy - sy * sy;
+  const a = den ? (m * sxy - sy * sx) / den : best[0];
+  return { a, b: (sx - a * sy) / m, inliers: m };
+}
+
+/* ---------------- lean measurement ---------------- */
+function findBase(grad, box) {
+  const { W, H, gy } = grad; const [x1, y1, x2, y2] = box.map(Math.round), h = y2 - y1, cx = (x1 + x2) / 2;
+  const top = Math.round(y1 + 0.80 * h), bot = Math.min(H - 2, Math.round(y2 + 0.03 * h));
+  let best = { s: -1, row: Math.round((top + bot) / 2), ang: 0 };
+  for (let ang = -8; ang <= 8.001; ang += 0.5) {
+    const t = Math.tan(rad(ang));
+    for (let row = top; row <= bot; row++) {
+      let s = 0, cnt = 0;
+      for (let x = Math.max(1, x1); x < Math.min(W - 1, x2); x += 2) {
+        const yy = Math.round(row + t * (x - cx)); if (yy < 1 || yy >= H - 1) continue;
+        s += gy[yy * W + x]; cnt++;
+      }
+      if (cnt && s / cnt > best.s) best = { s: s / cnt, row, ang };
+    }
+  }
+  const t = Math.tan(rad(best.ang));
+  return [x1, best.row + t * (x1 - cx), x2, best.row + t * (x2 - cx)];
+}
+
+function findSide(grad, box, yTop, yBottom, side, inward = 0.15, outward = 0.03) {
+  const { W, gx } = grad; const [x1, , x2] = box, w = x2 - x1;
+  const lo = Math.max(1, Math.round(side === "left" ? x1 - outward * w : x2 - inward * w));
+  const hi = Math.min(W - 2, Math.round(side === "left" ? x1 + inward * w : x2 + outward * w));
+  const ys = [], xs = [];
+  for (let y = Math.round(yTop); y < yBottom - 2; y += 2) {
+    let m = 0, mx = -1; const row = y * W;
+    for (let x = lo; x <= hi; x++) { const v = gx[row + x]; if (v > m) { m = v; mx = x; } }
+    if (m >= 25) { ys.push(y); xs.push(mx); }
+  }
+  const tol = Math.max(3, grad.W / 400);
+  const f = fitLine(ys, xs, tol);
+  if (!f || f.inliers < 15) return null;
+  return { line: [f.a * yTop + f.b, yTop, f.a * yBottom + f.b, yBottom], inliers: f.inliers };
+}
+
+function analysePallet(photo, box) {
+  const grad = gradients(photo);
+  const base = findBase(grad, box);
+  const yBase = Math.min(base[1], base[3]);
+  const yTop = box[1] + 0.03 * (box[3] - box[1]);
+  const L = findSide(grad, box, yTop, yBase, "left");
+  const R = findSide(grad, box, yTop, yBase, "right");
+  const W = photo.img.width, H = photo.img.height, m = 0.008;
+  const partial = box[0] < W * m || box[2] > W * (1 - m) || box[1] < H * m || box[3] > H * (1 - m);
+  return {
+    base, left: L ? L.line : [box[0], yTop, box[0], yBase], right: R ? R.line : [box[2], yTop, box[2], yBase],
+    sidesFound: !!(L && R), partial,
+  };
+}
+
+function uprightTilts(photo) {
+  const grad = gradients(photo), out = [];
+  for (const u of photo.uprights) {
+    const [x1, y1, x2, y2] = u.b; if (y2 - y1 < 0.35 * photo.img.height) continue;
+    const L = findSide(grad, u.b, y1 + 2, y2 - 2, "left", 0.35, 0.25);
+    const R = findSide(grad, u.b, y1 + 2, y2 - 2, "right", 0.35, 0.25);
+    if (!L || !R) continue;
+    const t = (sideTilt(L.line) + sideTilt(R.line)) / 2;
+    if (Math.abs(t) < 6) out.push(t);
+  }
+  return out;
+}
+
+/* tilt of a side line, degrees, + = top leans right */
+function sideTilt(l) { return deg(Math.atan2(l[0] - l[2], l[3] - l[1])); }
+
+function referenceDeg(photo) {
+  if (photo.ref.mode === "manual") return photo.ref.manual;
+  if (photo.ref.mode === "photo") return 0;
+  return photo.ref.auto ?? 0;
+}
+
+/* The straight box: it stands on the bottom corners of the load (where it sits on the pallet)
+   and rises along the reference vertical. A straight load stays inside it. */
+function envelope(photo, base) {
+  const L = base.lines.left, R = base.lines.right, t = Math.tan(rad(referenceDeg(photo)));
+  const x0l = L[2], y0l = L[3], x0r = R[2], y0r = R[3];
+  return { t, xl: (y) => x0l + t * (y0l - y), xr: (y) => x0r + t * (y0r - y), bl: [x0l, y0l], br: [x0r, y0r], width: Math.hypot(x0r - x0l, y0r - y0l) };
+}
+/* How far a load's top corners are outside the box. shift = sideways movement (lean),
+   spread = both sides wider at the top (camera angle or a bulging load). */
+function levelOut(env, p) {
+  const L = p.lines.left, R = p.lines.right;
+  const lo = env.xl(L[1]) - L[0], ro = R[0] - env.xr(R[1]);
+  const lob = env.xl(L[3]) - L[2], rob = R[2] - env.xr(R[3]);
+  return { leftOut: lo, rightOut: ro, shift: (ro - lo) / 2, spread: (ro + lo) / 2, placeShift: (rob - lob) / 2 };
+}
+const RANK = { ok: 0, check: 1, unsafe: 2 };
+function judge(leanDeg, shiftMm) {
+  const a = Math.abs(leanDeg) >= state.unsafe ? "unsafe" : Math.abs(leanDeg) >= state.warn ? "check" : "ok";
+  const m = Math.abs(shiftMm) >= state.stackUnsafeMm ? "unsafe" : Math.abs(shiftMm) >= state.stackWarnMm ? "check" : "ok";
+  return RANK[m] > RANK[a] ? m : a;
+}
+function measure(photo, p) {
+  const ref = referenceDeg(photo);
+  const lt = sideTilt(p.lines.left), rt = sideTilt(p.lines.right);
+  const lean = (lt + rt) / 2 - ref, taper = (rt - lt) / 2;
+  const env = envelope(photo, p), o = levelOut(env, p);
+  const mmPx = env.width > 0 ? state.palletMm / env.width : 0;
+  const offsetMm = o.shift * mmPx, spreadMm = o.spread * mmPx;
+  return { lean, taper, lt, rt, offsetMm, spreadMm, leftOutMm: o.leftOut * mmPx, rightOutMm: o.rightOut * mmPx, verdict: judge(lean, offsetMm), ref };
+}
+
+/* final status shown for a pallet, taking the reviewer's call into account */
+function finalStatus(photo, p) {
+  const m = measure(photo, p);
+  if (p.call === "not_pallet") return { key: "na", label: "Not a pallet", m };
+  if (p.call === "straight") return { key: "ok", label: "Straight", m, yours: true };
+  if (p.call === "leaning") return { key: m.verdict === "unsafe" ? "unsafe" : "check", label: "Leaning", m, yours: true };
+  if (p.partial) return { key: "na", label: "Partly out of view", m };
+  return { key: m.verdict, label: { ok: "OK", check: "Check", unsafe: "Unsafe" }[m.verdict], m };
+}
+
+/* ---------------- stacks ----------------
+   Pallets block-stacked on each other are judged as one column: the reference vertical
+   starts at the BOTTOM pallet's base and runs to the top of the stack, so every level's
+   lean and off-centre placement adds up in the result. */
+function geom(p) {
+  const L = p.lines.left, R = p.lines.right;
+  return { topX: (L[0] + R[0]) / 2, topY: Math.min(L[1], R[1]), botX: (L[2] + R[2]) / 2, botY: (L[3] + R[3]) / 2, baseLen: Math.hypot(R[2] - L[2], R[3] - L[3]) };
+}
+function hOverlap(a, b) { return Math.min(a[2], b[2]) - Math.max(a[0], b[0]); }
+function beamBetween(photo, lower, upper) {
+  const yA = upper.box[3] - 0.06 * (upper.box[3] - upper.box[1]), yB = lower.box[1] + 0.06 * (lower.box[3] - lower.box[1]);
+  return (photo.beams || []).some((bm) => {
+    const cy = (bm.b[1] + bm.b[3]) / 2;
+    return cy > Math.min(yA, yB) - 4 && cy < Math.max(yA, yB) + 4 && hOverlap(bm.b, lower.box) > 0.3 * (lower.box[2] - lower.box[0]);
+  });
+}
+function findStacks(photo) {
+  const ps = photo.pallets.filter((p) => p.call !== "not_pallet");
+  const no = new Set(photo.noStack || []);
+  const below = new Map();
+  for (const U of ps) {
+    if (no.has(U.id)) continue;
+    let best = null, bestGap = Infinity;
+    for (const L of ps) {
+      if (L === U) continue;
+      const lw = L.box[2] - L.box[0], uw = U.box[2] - U.box[0], lh = L.box[3] - L.box[1];
+      if (hOverlap(U.box, L.box) < 0.5 * Math.min(lw, uw)) continue;
+      if ((U.box[1] + U.box[3]) / 2 >= (L.box[1] + L.box[3]) / 2) continue;      // U must be above L
+      const gap = Math.abs(U.box[3] - L.box[1]);                                 // U's bottom sits on L's top
+      if (gap > 0.12 * lh) continue;
+      if (beamBetween(photo, L, U)) continue;                                    // separate rack levels, not a stack
+      if (gap < bestGap) { bestGap = gap; best = L; }
+    }
+    if (best) below.set(U.id, best);
+  }
+  const lowers = new Set([...below.values()].map((p) => p.id));
+  const stacks = [];
+  for (const B of ps) {
+    if (!lowers.has(B.id) || below.has(B.id)) continue;
+    const chain = [B]; let cur = B;
+    for (;;) { const up = ps.find((q) => below.get(q.id) === cur && !chain.includes(q)); if (!up) break; chain.push(up); cur = up; }
+    if (chain.length > 1) stacks.push(chain);
+  }
+  return stacks;
+}
+/* One tall box stands on the bottom pallet and rises through the whole stack;
+   every level is checked against that same box, so leans add up. */
+function measureStack(photo, chain) {
+  const env = envelope(photo, chain[0]);
+  const mmPx = env.width > 0 ? state.palletMm / env.width : 0;
+  const bot = geom(chain[0]), top = geom(chain[chain.length - 1]);
+  const height = bot.botY - top.topY;
+  const levels = chain.map((p) => {
+    const o = levelOut(env, p);
+    return { n: p.n, lean: measure(photo, p).lean, placeMm: o.placeShift * mmPx, topMm: o.shift * mmPx, leftOutMm: o.leftOut * mmPx, rightOutMm: o.rightOut * mmPx };
+  });
+  const worst = levels.reduce((a, b) => (Math.abs(b.topMm) > Math.abs(a.topMm) ? b : a), levels[0]);
+  const offsetMm = worst.topMm;
+  const lean = deg(Math.atan2(levels[levels.length - 1].topMm / (mmPx || 1), height));
+  const verdict = judge(lean, offsetMm);
+  const partial = chain.some((p) => p.partial && !p.call);
+  return { lean, offsetMm, height, levels, verdict, partial, bot, top, env };
+}
+function stackOf(photo, p) {
+  for (const ch of findStacks(photo)) if (ch.includes(p)) return ch;
+  return null;
+}
+
+/* ---------------- photos ---------------- */
+function loadImage(src) {
+  return new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error("image could not be read")); im.src = src; });
+}
+async function toWorkImage(im) {
+  const s = Math.min(1, WORK_MAX / Math.max(im.naturalWidth, im.naturalHeight));
+  const W = Math.round(im.naturalWidth * s), H = Math.round(im.naturalHeight * s);
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  c.getContext("2d").drawImage(im, 0, 0, W, H);
+  const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.9));
+  return { canvas: c, blob, W, H };
+}
+
+async function processPhoto(photo) {
+  photo.status = "detecting"; renderThumbs();
+  const dets = await detect(photo.img);
+  photo.uprights = dets.filter((d) => d.cls === CLS.upright);
+  photo.beams = dets.filter((d) => d.cls === CLS.beam);
+  const tilts = uprightTilts(photo);
+  photo.ref.auto = tilts.length ? median(tilts) : null;
+  photo.ref.uprightCount = tilts.length;
+  photo.pallets = dets.filter((d) => d.cls === CLS.pallet).sort((a, b) => a.b[0] - b.b[0]).map((d, i) => makePallet(photo, d.b, d.score, false, i + 1));
+  photo.status = "done";
+}
+function median(a) { const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+
+function makePallet(photo, box, score, added, n) {
+  const a = analysePallet(photo, box);
+  const lines = { left: a.left, right: a.right, base: a.base };
+  return {
+    id: uid(), n: n ?? (photo.pallets.length + 1), box: box.map((v) => Math.round(v)), score: +score.toFixed(3),
+    auto: JSON.parse(JSON.stringify(lines)), lines, sidesFound: a.sidesFound, partial: a.partial,
+    call: null, edited: false, added,
+  };
+}
+
+const pending = [];
+async function addFiles(files) {
+  const list = [...files].filter((f) => f.type.startsWith("image/") || /\.(jpe?g|png|webp|heic)$/i.test(f.name));
+  for (const f of list) {
+    const url = URL.createObjectURL(f);
+    let im;
+    try { im = await loadImage(url); } catch (e) { toast(f.name + " could not be read. Export it as JPG and try again."); URL.revokeObjectURL(url); continue; }
+    const work = await toWorkImage(im); URL.revokeObjectURL(url);
+    const img = await loadImage(URL.createObjectURL(work.blob));
+    const photo = { id: uid(), name: f.name, kind: "new", img, w: work.W, h: work.H, blob: work.blob, pallets: [], uprights: [], ref: { mode: "auto", manual: 0, auto: null }, status: "queued", created: Date.now() };
+    state.photos.unshift(photo);
+    renderThumbs();
+    openPhoto(photo);
+    if (state.modelReady) await runPhoto(photo);
+    else if (state.modelFailed) await manualPhoto(photo);
+    else { pending.push(photo); toast("Photo added. Pallets will be found as soon as the model has loaded."); }
+  }
+}
+async function runPhoto(photo) {
+  try { await processPhoto(photo); } catch (e) { photo.status = "error"; toast("Detection failed on " + photo.name + ": " + e.message); }
+  if (state.current === photo) openPhoto(photo);
+  renderThumbs(); renderStats();
+  await savePhoto(photo, true);
+}
+/* Without the model: keep the photo and let the reviewer draw pallets by hand. */
+async function manualPhoto(photo) {
+  photo.status = "done"; photo.pallets = []; photo.uprights = [];
+  if (state.current === photo) { openPhoto(photo); setDrawMode(true); }
+  renderThumbs();
+  await savePhoto(photo, true);
+}
+
+/* ---------------- persistence ---------------- */
+function serialize(photo) {
+  return {
+    name: photo.name, assetId: photo.assetId || null, w: photo.w, h: photo.h, created: photo.created, updated: Date.now(),
+    ref: { mode: photo.ref.mode, manual: photo.ref.manual, auto: photo.ref.auto, uprightCount: photo.ref.uprightCount || 0 },
+    uprights: photo.uprights.map((u) => ({ b: u.b.map((v) => Math.round(v)), score: +u.score.toFixed(3) })),
+    beams: (photo.beams || []).map((u) => ({ b: u.b.map((v) => Math.round(v)), score: +u.score.toFixed(3) })),
+    noStack: photo.noStack || [],
+    stacks: findStacks(photo).map((ch) => { const ms = measureStack(photo, ch); return { pallets: ch.map((p) => p.id), offsetMm: Math.round(ms.offsetMm), lean: +ms.lean.toFixed(2), verdict: ms.verdict, partial: ms.partial }; }),
+    pallets: photo.pallets.map((p) => {
+      const m = measure(photo, p);
+      return {
+        id: p.id, n: p.n, box: p.box, score: p.score, auto: p.auto, lines: p.lines, sidesFound: p.sidesFound, partial: p.partial,
+        call: p.call, edited: p.edited, added: p.added,
+        result: { lean: +m.lean.toFixed(2), taper: +m.taper.toFixed(2), verdict: m.verdict, reference: +m.ref.toFixed(2) },
+      };
+    }),
+  };
+}
+const saveTimers = new Map(), saving = new Map();
+function scheduleSave(photo) {
+  if (photo.kind === "example" || !state.canSave) return;
+  clearTimeout(saveTimers.get(photo.id));
+  saveTimers.set(photo.id, setTimeout(() => savePhoto(photo), 700));
+}
+async function savePhoto(photo, first) {
+  if (photo.kind === "example" || !state.canSave || photo.status === "error") return;
+  if (saving.get(photo.id)) { saving.set(photo.id, "again"); return; }
+  saving.set(photo.id, true);
+  try {
+    if (first && !photo.assetId && state.assets && photo.blob) {
+      const up = await state.assets.upload(photo.blob, { filename: photo.name.replace(/\.[^.]+$/, "") + ".jpg" });
+      photo.assetId = up.id;
+    }
+    await state.db.doc("photos/" + photo.id).set(serialize(photo));
+    photo.kind = "saved";
+    $("saveNote").textContent = "Saved " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch (e) {
+    $("saveNote").textContent = e && e.code === "quota_exceeded" ? "Storage is full. Remove some photos to save new ones." : "Could not save: " + (e && e.message || e);
+  } finally {
+    const again = saving.get(photo.id) === "again"; saving.delete(photo.id);
+    if (again) savePhoto(photo);
+  }
+}
+async function saveSettings() {
+  if (!state.canSave) return;
+  clearTimeout(saveSettings._t);
+  saveSettings._t = setTimeout(async () => {
+    try { await state.db.doc("settings/main").set({ warn: state.warn, unsafe: state.unsafe, palletMm: state.palletMm, stackWarnMm: state.stackWarnMm, stackUnsafeMm: state.stackUnsafeMm }); } catch (e) { /* settings are a convenience */ }
+  }, 600);
+}
+
+function photoFromDoc(id, d) {
+  return {
+    id, name: d.name || "photo", kind: "saved", assetId: d.assetId, w: d.w, h: d.h, created: d.created || 0, updated: d.updated || 0,
+    img: null, pallets: (d.pallets || []).map((p) => ({ ...p, lines: JSON.parse(JSON.stringify(p.lines)), auto: p.auto })),
+    uprights: d.uprights || [], beams: d.beams || [], noStack: d.noStack || [], ref: { mode: d.ref?.mode || "auto", manual: d.ref?.manual || 0, auto: d.ref?.auto ?? null, uprightCount: d.ref?.uprightCount || 0 },
+    status: "done",
+  };
+}
+
+async function initStorage() {
+  if (!window.claude || typeof window.claude.use !== "function") { $("saveNote").textContent = "Corrections are not saved in this view."; return; }
+  const [db, assets, downloads, user] = await Promise.all([
+    claude.use("db"), claude.use("assets"), claude.use("downloads"), claude.use("user"),
+  ]);
+  state.db = db; state.assets = assets; state.downloads = downloads;
+  let canWrite = null; try { canWrite = user ? await user.can("data.write") : null; } catch (e) { canWrite = null; }
+  state.canSave = !!db && canWrite !== false;
+  if (!db) { $("saveNote").textContent = "Corrections are not saved in this view."; return; }
+  if (!state.canSave) $("saveNote").textContent = "You can review here, but only editors can save corrections.";
+  db.doc("settings/main").get().then((s) => {
+    if (s.exists) { const d = s.data(); state.warn = d.warn ?? state.warn; state.unsafe = d.unsafe ?? state.unsafe; state.palletMm = d.palletMm ?? state.palletMm; state.stackWarnMm = d.stackWarnMm ?? state.stackWarnMm; state.stackUnsafeMm = d.stackUnsafeMm ?? state.stackUnsafeMm; syncRuleInputs(); refreshAll(); }
+  }).catch(() => {});
+  const timer = setTimeout(() => { if (!state.photos.some((p) => p.kind === "saved")) $("saveNote").textContent = "Saved photos can't be reached yet."; }, 10000);
+  db.collection("photos").orderBy("created", "desc").limit(300).onSnapshot((snap) => {
+    if (!snap.metadata.fromCache) clearTimeout(timer);
+    let changed = false;
+    for (const ch of snap.docChanges()) {
+      const id = ch.doc.id, existing = state.photos.find((p) => p.id === id);
+      if (ch.type === "removed") { if (existing && !snap.metadata.hasPendingWrites) { state.photos = state.photos.filter((p) => p !== existing); changed = true; if (state.current === existing) openPhoto(state.photos[0] || null); } continue; }
+      const d = ch.doc.data(); if (!d) continue;
+      if (!existing) { state.photos.push(photoFromDoc(id, d)); changed = true; }
+      else if (existing.kind === "saved" && (d.updated || 0) > (existing.updated || 0) && existing !== state.current) {
+        Object.assign(existing, photoFromDoc(id, d), { img: existing.img, grad: existing.grad }); changed = true;
+      }
+    }
+    if (changed) {
+      state.photos.sort((a, b) => (a.kind === "example") - (b.kind === "example") || b.created - a.created);
+      renderThumbs(); renderStats();
+      if (!state.current || state.current.kind === "example") { const first = state.photos.find((p) => p.kind !== "example"); if (first) openPhoto(first); }
+    }
+  }, () => { clearTimeout(timer); $("saveNote").textContent = "Saved photos could not be loaded."; });
+}
+
+/* ---------------- canvas view ---------------- */
+const view = $("view"), ctx = view.getContext("2d");
+let viewScale = 1;
+function layoutCanvas() {
+  const p = state.current; const wrap = $("canvasWrap");
+  if (!p || !p.img) { view.width = 10; view.height = 10; view.style.width = "0px"; return; }
+  const maxW = wrap.clientWidth - 20, maxH = Math.max(320, Math.min(window.innerHeight * 0.72, 900));
+  viewScale = Math.min(maxW / p.w, maxH / p.h);
+  const cw = Math.round(p.w * viewScale), ch = Math.round(p.h * viewScale), dpr = window.devicePixelRatio || 1;
+  view.style.width = cw + "px"; view.style.height = ch + "px";
+  view.width = Math.round(cw * dpr); view.height = Math.round(ch * dpr);
+  ctx.setTransform(dpr * viewScale, 0, 0, dpr * viewScale, 0, 0);
+}
+function draw() {
+  const p = state.current;
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, view.width, view.height); ctx.restore();
+  if (!p || !p.img) return;
+  ctx.drawImage(p.img, 0, 0, p.w, p.h);
+  const px = 1 / viewScale; // one CSS pixel in image units
+  for (const u of p.uprights || []) {
+    ctx.strokeStyle = "rgba(120,200,255,.45)"; ctx.lineWidth = 1.5 * px; ctx.setLineDash([4 * px, 4 * px]);
+    ctx.strokeRect(u.b[0], u.b[1], u.b[2] - u.b[0], u.b[3] - u.b[1]);
+  }
+  ctx.setLineDash([]);
+  const stacks = findStacks(p), inStack = new Set(stacks.flat());
+  const ordered = [...p.pallets].sort((a, b) => (a === state.selected) - (b === state.selected));
+  for (const pal of ordered) drawPallet(p, pal, pal === state.selected, px, inStack.has(pal));
+  for (const ch of stacks) drawStack(p, ch, ch.includes(state.selected), px);
+  if (drag && drag.kind === "draw") {
+    const [x1, y1, x2, y2] = drag.rect; ctx.strokeStyle = COLORS.sel; ctx.lineWidth = 2 * px; ctx.setLineDash([6 * px, 4 * px]);
+    ctx.strokeRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1)); ctx.setLineDash([]);
+  }
+}
+function drawPallet(photo, p, sel, px, stacked) {
+  const st = finalStatus(photo, p), col = COLORS[st.key];
+  const dim = p.partial && !p.call && !sel ? 0.4 : state.selected && !sel ? 0.6 : 1;
+  ctx.globalAlpha = dim;
+  ctx.strokeStyle = "rgba(255,255,255,.35)"; ctx.lineWidth = 1 * px; ctx.setLineDash([3 * px, 3 * px]);
+  ctx.strokeRect(p.box[0], p.box[1], p.box[2] - p.box[0], p.box[3] - p.box[1]); ctx.setLineDash([]);
+  if (p.call === "not_pallet") { ctx.globalAlpha = 1; label(p, "Not a pallet", COLORS.na, px); return; }
+  const top = Math.min(p.lines.left[1], p.lines.right[1]);
+  // single pallets get their own straight box; stacked pallets are drawn against the stack's box
+  if (!stacked) { const env = envelope(photo, p); shadeOutside(env, p, px); drawBox(env, top, col, px, sel); }
+  // load edges: where the stock actually is
+  ctx.strokeStyle = COLORS.load; ctx.lineWidth = (sel ? 3 : 2.2) * px;
+  for (const l of [p.lines.left, p.lines.right]) { ctx.beginPath(); ctx.moveTo(l[0], l[1]); ctx.lineTo(l[2], l[3]); ctx.stroke(); }
+  ctx.globalAlpha = dim;
+  if (!stacked || p.partial) {
+    const out = Math.abs(st.m.offsetMm);
+    label(p, p.partial && !p.call ? "EDGE" : `${st.label.toUpperCase()} · ${out < 5 ? "inside box" : out.toFixed(0) + " mm out " + (st.m.offsetMm >= 0 ? "→" : "←")}`, col, px);
+  }
+  ctx.globalAlpha = 1;
+  if (sel) for (const h of handles(p)) {
+    ctx.beginPath(); ctx.arc(h.x, h.y, 8 * px, 0, Math.PI * 2); ctx.fillStyle = "#ffffff"; ctx.fill();
+    ctx.lineWidth = 2.5 * px; ctx.strokeStyle = col; ctx.stroke();
+  }
+}
+/* the straight box, from the load's bottom corners up to topY along the reference vertical */
+function drawBox(env, topY, col, px, strong) {
+  const pts = [env.bl, env.br, [env.xr(topY), topY], [env.xl(topY), topY]];
+  ctx.beginPath(); ctx.moveTo(...pts[0]); for (const q of pts.slice(1)) ctx.lineTo(...q); ctx.closePath();
+  ctx.fillStyle = "rgba(255,255,255,.06)"; ctx.fill();
+  ctx.strokeStyle = col; ctx.lineWidth = (strong ? 3.5 : 2.5) * px; ctx.setLineDash([]); ctx.stroke();
+  ctx.strokeStyle = COLORS.base; ctx.lineWidth = 4 * px; ctx.beginPath(); ctx.moveTo(...env.bl); ctx.lineTo(...env.br); ctx.stroke();
+}
+/* red wedge wherever the load's edge is outside the box */
+function shadeOutside(env, p, px) {
+  const L = p.lines.left, R = p.lines.right;
+  ctx.fillStyle = "rgba(255,70,60,.42)";
+  const wedge = (a, b, ea, eb) => { ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.lineTo(...eb); ctx.lineTo(...ea); ctx.closePath(); ctx.fill(); };
+  if (env.xl(L[1]) - L[0] > 1 || env.xl(L[3]) - L[2] > 1) wedge([L[2], L[3]], [L[0], L[1]], [env.xl(L[3]), L[3]], [env.xl(L[1]), L[1]]);
+  if (R[0] - env.xr(R[1]) > 1 || R[2] - env.xr(R[3]) > 1) wedge([R[2], R[3]], [R[0], R[1]], [env.xr(R[3]), R[3]], [env.xr(R[1]), R[1]]);
+}
+function drawStack(photo, chain, sel, px) {
+  const ms = measureStack(photo, chain), col = ms.partial ? COLORS.na : COLORS[ms.verdict];
+  ctx.globalAlpha = ms.partial && !sel ? 0.35 : state.selected && !sel ? 0.6 : 1;
+  // one tall box from the bottom pallet up through the whole stack
+  for (const p of chain) shadeOutside(ms.env, p, px);
+  drawBox(ms.env, ms.top.topY, col, px, sel);
+  // thin marks where each level starts, for reading the table
+  ctx.strokeStyle = "rgba(255,255,255,.55)"; ctx.lineWidth = 1.5 * px; ctx.setLineDash([4 * px, 4 * px]);
+  for (const p of chain.slice(1)) { const y = geom(p).botY; ctx.beginPath(); ctx.moveTo(ms.env.xl(y), y); ctx.lineTo(ms.env.xr(y), y); ctx.stroke(); }
+  ctx.setLineDash([]);
+  if (ms.partial && !sel) { ctx.globalAlpha = 1; return; }
+  const out = Math.abs(ms.offsetMm);
+  const txt = `STACK ×${chain.length} · ${ms.partial ? "EDGE" : ms.verdict.toUpperCase()} · ${out < 5 ? "inside box" : out.toFixed(0) + " mm out " + (ms.offsetMm >= 0 ? "→" : "←")}`;
+  const fs = 13 * px; ctx.font = `700 ${fs}px "IBM Plex Sans", system-ui, sans-serif`;
+  const w = ctx.measureText(txt).width + 12 * px, h = fs + 8 * px;
+  const top = chain[chain.length - 1].box;
+  const x = Math.min(Math.max(0, top[0]), Math.max(0, photo.w - w)), y = Math.max(0, top[1] - h - 4 * px);
+  ctx.fillStyle = "rgba(10,14,18,.85)"; ctx.fillRect(x, y, w, h); ctx.fillStyle = col; ctx.fillRect(x, y, 4 * px, h);
+  ctx.fillStyle = "#ffffff"; ctx.fillText(txt, x + 8 * px, y + fs + 1 * px);
+  ctx.globalAlpha = 1;
+}
+function label(p, text, col, px) {
+  const fs = 13 * px; ctx.font = `600 ${fs}px "IBM Plex Sans", system-ui, sans-serif`;
+  const w = ctx.measureText(text).width + 12 * px, h = fs + 8 * px;
+  const x = Math.max(0, p.box[0]), y = Math.max(0, p.box[1] - h - 4 * px);
+  ctx.fillStyle = "rgba(10,14,18,.78)"; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = col; ctx.fillRect(x, y, 4 * px, h);
+  ctx.fillStyle = "#ffffff"; ctx.fillText(text, x + 8 * px, y + fs + 1 * px);
+}
+function handles(p) {
+  return [
+    { key: "left", i: 0, x: p.lines.left[0], y: p.lines.left[1] }, { key: "left", i: 2, x: p.lines.left[2], y: p.lines.left[3] },
+    { key: "right", i: 0, x: p.lines.right[0], y: p.lines.right[1] }, { key: "right", i: 2, x: p.lines.right[2], y: p.lines.right[3] },
+  ];
+}
+
+/* ---------------- pointer interaction ---------------- */
+let drag = null;
+function toImg(e) { const r = view.getBoundingClientRect(); return [(e.clientX - r.left) / viewScale, (e.clientY - r.top) / viewScale]; }
+view.addEventListener("pointerdown", (e) => {
+  const p = state.current; if (!p || !p.img || p.status !== "done") return;
+  const [x, y] = toImg(e), tol = 16 / viewScale;
+  view.setPointerCapture(e.pointerId);
+  if (state.drawMode) { drag = { kind: "draw", rect: [x, y, x, y] }; return; }
+  if (state.selected && state.selected.call !== "not_pallet") {
+    const h = handles(state.selected).map((q) => ({ ...q, d: Math.hypot(q.x - x, q.y - y) })).sort((a, b) => a.d - b.d)[0];
+    if (h && h.d < tol) { drag = { kind: "handle", h, p: state.selected }; view.classList.add("grab"); return; }
+  }
+  const hit = p.pallets.filter((q) => x >= q.box[0] && x <= q.box[2] && y >= q.box[1] && y <= q.box[3])
+    .sort((a, b) => (a.box[2] - a.box[0]) * (a.box[3] - a.box[1]) - (b.box[2] - b.box[0]) * (b.box[3] - b.box[1]))[0];
+  selectPallet(hit || null);
+});
+view.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const [x, y] = toImg(e), p = state.current;
+  const cx = Math.max(0, Math.min(p.w, x)), cy = Math.max(0, Math.min(p.h, y));
+  if (drag.kind === "draw") { drag.rect[2] = cx; drag.rect[3] = cy; draw(); return; }
+  const l = drag.p.lines[drag.h.key]; l[drag.h.i] = cx; l[drag.h.i + 1] = cy;
+  drag.p.edited = true; draw(); renderDetail();
+});
+function endDrag() {
+  if (!drag) return;
+  const p = state.current, d = drag; drag = null; view.classList.remove("grab");
+  if (d.kind === "draw") {
+    const [x1, y1, x2, y2] = d.rect, box = [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)];
+    if (box[2] - box[0] > 20 && box[3] - box[1] > 20) {
+      const np = makePallet(p, box, 1, true, Math.max(0, ...p.pallets.map((q) => q.n)) + 1);
+      p.pallets.push(np); selectPallet(np); setDrawMode(false); scheduleSave(p);
+    }
+    draw(); renderInspector(); renderThumbs(); return;
+  }
+  renderInspector(); renderThumbs(); renderStats(); scheduleSave(p);
+}
+view.addEventListener("pointerup", endDrag);
+view.addEventListener("pointercancel", endDrag);
+
+function setDrawMode(on) {
+  state.drawMode = on; $("drawBtn").classList.toggle("on", on); $("drawBtn").setAttribute("aria-pressed", String(on));
+  $("drawBtn").textContent = on ? "Drag over the pallet…" : "Draw missing pallet";
+}
+$("drawBtn").addEventListener("click", () => setDrawMode(!state.drawMode));
+
+/* ---------------- inspector ---------------- */
+function selectPallet(p) { state.selected = p; draw(); renderInspector(); }
+function renderInspector() { renderList(); renderDetail(); }
+function renderList() {
+  const p = state.current, el = $("plist"), counts = $("photoCounts");
+  el.textContent = ""; counts.textContent = "";
+  if (!p || p.status !== "done") { counts.innerHTML = `<span class="chip na">${p && p.status === "error" ? "Detection failed" : p ? "Detecting…" : "No photo"}</span>`; return; }
+  if (!p.pallets.length) { counts.innerHTML = '<span class="chip na">No pallets found</span>'; el.innerHTML = '<p class="note">Use “Draw missing pallet” to add one by hand.</p>'; return; }
+  const tally = { ok: 0, check: 0, unsafe: 0, na: 0 };
+  for (const q of p.pallets) tally[finalStatus(p, q).key]++;
+  const stacks = findStacks(p);
+  for (const ch of stacks) {
+    const ms = measureStack(p, ch), k = ms.partial ? "na" : ms.verdict;
+    const c = document.createElement("span"); c.className = "chip " + k;
+    c.textContent = `Stack of ${ch.length}: ${ms.partial ? "edge" : { ok: "OK", check: "Check", unsafe: "Unsafe" }[ms.verdict]}`; counts.appendChild(c);
+  }
+  for (const [k, lbl] of [["unsafe", "Unsafe"], ["check", "Check"], ["ok", "OK"], ["na", "Not judged"]]) if (tally[k]) {
+    const c = document.createElement("span"); c.className = "chip " + k; c.textContent = `${tally[k]} ${lbl}`; counts.appendChild(c);
+  }
+  for (const q of p.pallets) {
+    const st = finalStatus(p, q), b = document.createElement("button");
+    b.type = "button"; b.className = "pitem" + (q === state.selected ? " sel" : "");
+    b.innerHTML = `<span class="n">#${q.n}</span><span><span class="chip ${st.key}"></span><div class="you"></div></span><span class="m"></span>`;
+    b.querySelector(".chip").textContent = st.label;
+    b.querySelector(".you").textContent = q.call ? "Your call" : q.edited ? "Lines adjusted" : q.added ? "Added by you" : "Automatic";
+    b.querySelector(".m").textContent = q.call === "not_pallet" ? "" : fmtDeg(st.m.lean);
+    b.addEventListener("click", () => selectPallet(q));
+    el.appendChild(b);
+  }
+}
+function renderDetail() {
+  const photo = state.current, p = state.selected, panel = $("detailPanel");
+  if (!photo || !p || !photo.pallets.includes(p)) { panel.hidden = true; return; }
+  panel.hidden = false;
+  const st = finalStatus(photo, p), m = st.m;
+  $("dTitle").textContent = `Pallet #${p.n}` + (p.added ? " · drawn by you" : "");
+  const big = $("dBig"); big.className = "big " + st.key; big.textContent = st.label;
+  const autoP = { ...p, lines: p.auto, call: null }, am = measure(photo, autoP);
+  const autoTxt = { ok: "OK", check: "Check", unsafe: "Unsafe" }[am.verdict];
+  $("dAuto").textContent = p.added ? "Measured from the box you drew." : (p.edited || p.call) ? `Automatic result was ${autoTxt} at ${fmtDeg(am.lean)}.` : "Automatic result.";
+  $("dLean").textContent = fmtDeg(m.lean) + (m.lean > 0.05 ? " right" : m.lean < -0.05 ? " left" : "");
+  $("dOffset").textContent = Math.abs(m.offsetMm) < 5 ? "inside" : "≈ " + Math.abs(m.offsetMm).toFixed(0) + " mm " + (m.offsetMm >= 0 ? "right" : "left");
+  $("dTaper").textContent = (m.spreadMm >= 0 ? "+" : "−") + Math.abs(m.spreadMm).toFixed(0) + " mm";
+  $("dSides").textContent = `${fmtDeg(m.lt)} / ${fmtDeg(m.rt)}`;
+  const warns = [];
+  if (p.partial) warns.push("Part of this pallet is outside the photo, so the sides may be wrong.");
+  if (!p.sidesFound && !p.edited) warns.push("A load side was not found clearly. Check the side lines.");
+  if (Math.abs(m.taper) > 3) warns.push("Both sides lean outwards or inwards: usually camera angle or a bulging load. That part is not counted as lean.");
+  $("dWarn").hidden = !warns.length; $("dWarn").textContent = warns.join(" ");
+  for (const b of document.querySelectorAll(".seg button")) b.setAttribute("aria-pressed", String((b.dataset.call || null) === (p.call || null)));
+  $("delBtn").hidden = !p.added;
+  $("resetBtn").disabled = !p.edited;
+  renderStackBox(photo, p);
+}
+function renderStackBox(photo, p) {
+  const box = $("dStack"), chain = stackOf(photo, p), no = (photo.noStack || []).includes(p.id);
+  $("restackBtn").hidden = !no;
+  if (!chain) { box.hidden = !no; $("sLevels").textContent = ""; $("sChip").className = "chip na"; $("sChip").textContent = "Not stacked"; $("sSummary").textContent = "You marked this pallet as not standing on the one below."; $("unstackBtn").hidden = true; return; }
+  box.hidden = false;
+  const ms = measureStack(photo, chain), k = ms.partial ? "na" : ms.verdict;
+  $("sChip").className = "chip " + k;
+  $("sChip").textContent = ms.partial ? "Partly out of view" : { ok: "Stack OK", check: "Check stack", unsafe: "Stack unsafe" }[ms.verdict];
+  const dir = ms.offsetMm >= 0 ? "right" : "left";
+  $("sSummary").textContent = Math.abs(ms.offsetMm) < 5 ? "The whole stack stays inside the box." : `Stock sticks out ≈ ${Math.abs(ms.offsetMm).toFixed(0)} mm to the ${dir} of the box (${fmtDeg(ms.lean)} over the full height).`;
+  const tb = $("sLevels"); tb.textContent = "";
+  ms.levels.forEach((lv, i) => {
+    const tr = document.createElement("tr");
+    const cells = [i === 0 ? `#${lv.n} bottom` : `#${lv.n}`, fmtDeg(lv.lean), i === 0 ? "–" : `${lv.placeMm >= 0 ? "+" : "−"}${Math.abs(lv.placeMm).toFixed(0)} mm`, `${lv.topMm >= 0 ? "+" : "−"}${Math.abs(lv.topMm).toFixed(0)} mm`];
+    for (const c of cells) { const td = document.createElement("td"); td.textContent = c; tr.appendChild(td); }
+    if (chain[i] === p) tr.style.fontWeight = "600";
+    tb.appendChild(tr);
+  });
+  $("unstackBtn").hidden = chain[0] === p;
+}
+$("unstackBtn").addEventListener("click", () => {
+  const ph = state.current, p = state.selected; if (!ph || !p) return;
+  ph.noStack = [...new Set([...(ph.noStack || []), p.id])]; refreshAll(); scheduleSave(ph);
+});
+$("restackBtn").addEventListener("click", () => {
+  const ph = state.current, p = state.selected; if (!ph || !p) return;
+  ph.noStack = (ph.noStack || []).filter((id) => id !== p.id); refreshAll(); scheduleSave(ph);
+});
+for (const b of document.querySelectorAll(".seg button")) b.addEventListener("click", () => {
+  const p = state.selected; if (!p) return;
+  p.call = b.dataset.call || null; draw(); renderInspector(); renderThumbs(); renderStats(); scheduleSave(state.current);
+});
+$("resetBtn").addEventListener("click", () => {
+  const p = state.selected; if (!p) return; p.lines = JSON.parse(JSON.stringify(p.auto)); p.edited = false;
+  draw(); renderInspector(); renderThumbs(); scheduleSave(state.current);
+});
+$("delBtn").addEventListener("click", () => {
+  const ph = state.current, p = state.selected; if (!ph || !p) return;
+  ph.pallets = ph.pallets.filter((q) => q !== p); selectPallet(null); renderThumbs(); scheduleSave(ph);
+});
+
+/* ---------------- reference control ---------------- */
+function renderRef() {
+  const p = state.current, sel = $("refMode"), rr = $("refRange");
+  if (!p) return;
+  sel.value = p.ref.mode;
+  sel.options[0].textContent = p.ref.auto == null ? "Auto (no uprights found)" : `Auto (${p.ref.uprightCount || 1} upright${(p.ref.uprightCount || 1) > 1 ? "s" : ""})`;
+  rr.hidden = p.ref.mode !== "manual"; rr.value = p.ref.manual;
+  $("refOut").textContent = fmtDeg(referenceDeg(p));
+}
+$("refMode").addEventListener("change", (e) => { const p = state.current; if (!p) return; p.ref.mode = e.target.value; renderRef(); draw(); renderInspector(); renderThumbs(); scheduleSave(p); });
+$("refRange").addEventListener("input", (e) => { const p = state.current; if (!p) return; p.ref.manual = +e.target.value; renderRef(); draw(); renderInspector(); });
+$("refRange").addEventListener("change", () => { renderThumbs(); scheduleSave(state.current); });
+
+/* ---------------- thresholds ---------------- */
+function syncRuleInputs() {
+  $("warnRange").value = state.warn; $("unsafeRange").value = state.unsafe; $("palletSel").value = String(state.palletMm);
+  $("sWarnRange").value = state.stackWarnMm; $("sUnsafeRange").value = state.stackUnsafeMm;
+  $("sWarnOut").textContent = state.stackWarnMm + " mm"; $("sUnsafeOut").textContent = state.stackUnsafeMm + " mm";
+  $("warnOut").textContent = state.warn.toFixed(1) + "°"; $("unsafeOut").textContent = state.unsafe.toFixed(1) + "°";
+}
+function refreshAll() { draw(); renderInspector(); renderThumbs(); renderStats(); }
+$("warnRange").addEventListener("input", (e) => { state.warn = +e.target.value; if (state.unsafe < state.warn) state.unsafe = state.warn; syncRuleInputs(); refreshAll(); });
+$("unsafeRange").addEventListener("input", (e) => { state.unsafe = +e.target.value; if (state.warn > state.unsafe) state.warn = state.unsafe; syncRuleInputs(); refreshAll(); });
+for (const id of ["warnRange", "unsafeRange"]) $(id).addEventListener("change", saveSettings);
+$("palletSel").addEventListener("change", (e) => { state.palletMm = +e.target.value; refreshAll(); saveSettings(); });
+$("sWarnRange").addEventListener("input", (e) => { state.stackWarnMm = +e.target.value; if (state.stackUnsafeMm < state.stackWarnMm) state.stackUnsafeMm = state.stackWarnMm; syncRuleInputs(); refreshAll(); });
+$("sUnsafeRange").addEventListener("input", (e) => { state.stackUnsafeMm = +e.target.value; if (state.stackWarnMm > state.stackUnsafeMm) state.stackWarnMm = state.stackUnsafeMm; syncRuleInputs(); refreshAll(); });
+for (const id of ["sWarnRange", "sUnsafeRange"]) $(id).addEventListener("change", saveSettings);
+
+/* ---------------- photo strip ---------------- */
+function renderThumbs() {
+  const el = $("thumbs"); el.textContent = "";
+  if (!state.photos.length) { el.innerHTML = '<p class="note">Upload photos of racks or single pallets to start.</p>'; return; }
+  for (const p of state.photos) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "thumb" + (p === state.current ? " sel" : "");
+    const src = p.img ? p.img.src : p.assetId ? "/_blob/" + p.assetId : null;
+    b.innerHTML = (src ? `<img alt="" loading="lazy">` : `<span class="ph"></span>`) + `<span class="t"></span><span class="badges"></span>`;
+    if (src) b.querySelector("img").src = src;
+    b.querySelector(".t").textContent = p.name;
+    if (p.kind === "example") { const t = document.createElement("span"); t.className = "tag"; t.textContent = "Example"; b.appendChild(t); }
+    const bd = b.querySelector(".badges");
+    if (p.status === "done") {
+      const tally = { unsafe: 0, check: 0, ok: 0 };
+      for (const q of p.pallets) { const k = finalStatus(p, q).key; if (k in tally) tally[k]++; }
+      for (const ch of findStacks(p)) { const ms = measureStack(p, ch); if (!ms.partial && ms.verdict !== "ok") tally[ms.verdict]++; }
+      for (const k of ["unsafe", "check", "ok"]) if (tally[k]) { const c = document.createElement("span"); c.className = "chip " + k; c.textContent = tally[k] + " " + { unsafe: "Unsafe", check: "Check", ok: "OK" }[k]; bd.appendChild(c); }
+      if (!p.pallets.length) bd.innerHTML = '<span class="chip na">None</span>';
+    } else {
+      bd.innerHTML = `<span class="chip na">${p.status === "error" ? "Failed" : "Detecting"}</span>`;
+    }
+    b.addEventListener("click", () => openPhoto(p));
+    el.appendChild(b);
+  }
+}
+async function openPhoto(p) {
+  state.current = p; state.selected = null; setDrawMode(false);
+  $("photoName").textContent = p ? p.name : "No photo";
+  renderThumbs();
+  if (!p) { $("stageMsg").hidden = false; $("stageMsg").textContent = "Upload photos to start."; draw(); renderInspector(); return; }
+  if (!p.img && p.assetId) {
+    $("stageMsg").hidden = false; $("stageMsg").textContent = "Loading photo…";
+    try { p.img = await loadImage("/_blob/" + p.assetId); } catch (e) { $("stageMsg").textContent = "This photo could not be loaded."; return; }
+    if (state.current !== p) return;
+  }
+  $("stageMsg").hidden = p.status === "done";
+  if (p.status !== "done") $("stageMsg").textContent = p.status === "error" ? "Detection failed for this photo." : "Finding pallets…";
+  renderRef(); layoutCanvas();
+  if (p.status === "done" && p.pallets.length) {
+    const rank = { unsafe: 0, check: 1, ok: 2, na: 3 };
+    state.selected = [...p.pallets].sort((a, b) => rank[finalStatus(p, a).key] - rank[finalStatus(p, b).key])[0];
+  }
+  draw(); renderInspector();
+}
+
+/* ---------------- review statistics ---------------- */
+function renderStats() {
+  const rows = [];
+  for (const ph of state.photos) if (ph.kind !== "example" && ph.status === "done") for (const p of ph.pallets) {
+    if (p.call !== "straight" && p.call !== "leaning") continue;
+    const autoM = measure(ph, { ...p, lines: p.auto });
+    rows.push({ truth: p.call, autoLean: Math.abs(autoM.lean), autoFlag: autoM.verdict !== "ok" });
+  }
+  const el = $("stats");
+  if (!rows.length) { el.innerHTML = '<span class="muted">Mark pallets as Straight or Leaning to see how often the check agrees with you.</span>'; return; }
+  const agree = rows.filter((r) => (r.truth === "leaning") === r.autoFlag).length;
+  const missed = rows.filter((r) => r.truth === "leaning" && !r.autoFlag).length;
+  const falseA = rows.filter((r) => r.truth === "straight" && r.autoFlag).length;
+  let html = `<div>The check agreed with you on <b class="num">${agree} of ${rows.length}</b> pallets.</div>`;
+  html += `<div class="muted">Missed leans: <span class="num">${missed}</span> · False alarms: <span class="num">${falseA}</span></div>`;
+  const nL = rows.filter((r) => r.truth === "leaning").length, nS = rows.length - nL;
+  if (nL >= 2 && nS >= 2) {
+    let best = { t: state.warn, err: Infinity };
+    for (let t = 0.5; t <= 8; t += 0.1) {
+      const err = rows.filter((r) => (r.autoLean >= t) !== (r.truth === "leaning")).length;
+      if (err < best.err) best = { t, err };
+    }
+    html += `<div>Best “Check from” limit for your reviews: <b class="num">${best.t.toFixed(1)}°</b> (${rows.length - best.err} of ${rows.length} right). <button class="btn small" id="applyBest" type="button">Use it</button></div>`;
+    el.innerHTML = html;
+    $("applyBest").addEventListener("click", () => { state.warn = +best.t.toFixed(1); if (state.unsafe < state.warn) state.unsafe = state.warn; syncRuleInputs(); refreshAll(); saveSettings(); });
+    return;
+  }
+  html += `<div class="muted">Review at least two straight and two leaning pallets to get a suggested limit.</div>`;
+  el.innerHTML = html;
+}
+
+/* ---------------- export ---------------- */
+$("exportBtn").addEventListener("click", async () => {
+  const saved = state.photos.filter((p) => p.kind !== "example" && p.status === "done");
+  if (!saved.length) { toast("Upload and review some photos first."); return; }
+  const out = {
+    exported: new Date().toISOString(), limits: { checkDeg: state.warn, unsafeDeg: state.unsafe, palletMm: state.palletMm, stackCheckMm: state.stackWarnMm, stackUnsafeMm: state.stackUnsafeMm },
+    note: "Lines are [x_top, y_top, x_bottom, y_bottom] for sides and [x_left, y_left, x_right, y_right] for the base, in pixels of the stored photo (long side 1600 px).",
+    photos: saved.map((p) => ({ id: p.id, image: p.assetId ? "/_blob/" + p.assetId : null, ...serialize(p) })),
+  };
+  if (!state.downloads) { toast("Downloads are not available in this view."); return; }
+  try { await state.downloads.save({ filename: "pallet-lean-corrections.json", data: JSON.stringify(out, null, 2) }); }
+  catch (e) { if (e && e.code !== "declined" && e.code !== "cancelled") toast("Download failed: " + (e.message || e.code)); }
+});
+
+/* ---------------- upload wiring ---------------- */
+$("fileInput").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
+document.addEventListener("dragover", (e) => { e.preventDefault(); });
+document.addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+window.addEventListener("resize", () => { layoutCanvas(); draw(); });
+
+/* ---------------- start ---------------- */
+async function loadExamples() {
+  const ex = [["examples/leaning.jpg", "Example: load tilted about 5°"], ["examples/straight.jpg", "Example: straight pallets"]];
+  for (const [src, name] of ex) {
+    try {
+      const img = await loadImage(src);
+      const p = { id: "ex-" + src, name, kind: "example", img, w: img.width, h: img.height, pallets: [], uprights: [], ref: { mode: "auto", manual: 0, auto: null }, status: "queued", created: 0 };
+      state.photos.push(p);
+    } catch (e) { /* example missing: skip */ }
+  }
+  renderThumbs();
+}
+async function start() {
+  syncRuleInputs();
+  initStorage().catch(() => { $("saveNote").textContent = "Corrections are not saved in this view."; });
+  await loadExamples();
+  const firstEx = state.photos.find((p) => p.kind === "example");
+  if (firstEx && !state.current) openPhoto(firstEx);
+  $("stageMsg").textContent = "Loading the detection model (about 10 MB)…";
+  try {
+    await loadModel();
+    state.modelReady = true;
+    setStatus("Model ready. Detection runs in this browser; photos never leave this page except to be saved here.");
+  } catch (e) {
+    setStatus("<b>The detection model could not start in this browser.</b> " + (e && e.message ? e.message : ""));
+    $("stageMsg").textContent = "The detection model could not start in this browser.";
+    window.__leanError = String(e && e.stack || e);
+    state.modelFailed = true;
+    setStatus("<b>Automatic detection could not start on this device.</b> You can still upload photos and draw each pallet by hand to measure it.");
+    for (const p of state.photos.filter((q) => q.kind === "example")) { p.status = "done"; }
+    if (state.current) openPhoto(state.current);
+    while (pending.length) await manualPhoto(pending.shift());
+    renderThumbs();
+    return;
+  }
+  while (pending.length) await runPhoto(pending.shift());
+  for (const p of state.photos.filter((q) => q.kind === "example")) {
+    try { await processPhoto(p); } catch (e) { p.status = "error"; }
+    if (state.current === p) openPhoto(p);
+    renderThumbs();
+  }
+  window.__leanReady = true;
+}
+start();
+window.__lean = { state, measure, finalStatus, findStacks, measureStack };
+</script>
