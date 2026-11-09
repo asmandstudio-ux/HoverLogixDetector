@@ -3,3 +3,5 @@ pallet_label
 location_label
 beam
 upright
+empty_location
+pallet_base

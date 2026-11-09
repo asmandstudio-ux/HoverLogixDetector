@@ -8,7 +8,7 @@ This guide says what each part is, its exact data contract, and where it fits in
 
 | Path | What | Status |
 |---|---|---|
-| `models/` | YOLO26n detector v1: `.pt`, 960 px `.onnx` (+ two LiteRT `.tflite` in the app assets) | working, bootstrap quality |
+| `models/` | v1: YOLO26n, 5 classes (`.pt`, 960 px `.onnx`). `models/v2/`: YOLOv8n, 7 classes (`.pt`, 640 px `.onnx`, test results); its LiteRT files are in the app assets | v2 current |
 | `dataset/` | 984 YOLO label files, 5 classes, `label_status.csv`, previews (images live on Finney's Mac) | 36 hand, 946 auto |
 | `training/` | `train.py`, `autolabel.py`, `export_models.py` | used for v1 |
 | `pallet_safety/` | Python library + CLI: detection, lean check with the straight-box method, stack check | tested (`tests/`, CI) |
@@ -19,10 +19,26 @@ This guide says what each part is, its exact data contract, and where it fits in
 
 ## 2. The detector
 
-Classes: `0 pallet, 1 pallet_label, 2 location_label, 3 beam, 4 upright` (`dataset/classes.txt`).
+**v2 (current, Nov 2026): YOLOv8n, 640 px, 7 classes** `0 pallet, 1 pallet_label, 2 location_label, 3 beam, 4 upright, 5 empty_location, 6 pallet_base`.
+Trained on Colab T4 with `training/HoverLogix_YOLOv8_v2.ipynb` (two stages: train, fill in classes each source never labelled, retrain).
+Data: 984 DroneIMS photos + Roboflow "pallet detection" v5/v6 (pallet bases, CC BY 4.0) + "Warehouse Object Detection" (CC BY 4.0); build scripts in `training/v2/`.
+
+Held-out test (36 hand-labelled DroneIMS photos; 177 public pallet photos), mAP50:
+
+| Model file | DroneIMS all | pallet | pallet_label | location_label | beam | upright | pallet_base (public) | CPU speed* |
+|---|---|---|---|---|---|---|---|---|
+| `hoverlogix_v2.pt` | 0.85 | 0.96 | 0.97 | 0.79 | 0.68 | 0.86 | 0.84 | |
+| `hoverlogix_v2_640_float32.tflite` (app "Accurate", default) | 0.82 | 0.97 | 0.97 | 0.76 | 0.64 | 0.75 | 0.82 | 1x |
+| `hoverlogix_v2_640_int8.tflite` (app "Fast") | 0.67 | 0.90 | 0.84 | 0.46 | 0.51 | 0.66 | 0.79 | ~4x faster |
+
+*Relative, measured with LiteRT on x86 CPU. TFLite input `[1,3,640,640]` float32 RGB 0..1 (NCHW), output `[1,11,8400]` normalised.
+Known gaps: `empty_location` has too few examples to be reliable (rack-gap heuristic in the review page still applies); `pallet_base` is learned from
+public photos and is not yet found under loaded pallets on DroneIMS photos. Approving photos in the review page fixes both in the next round.
+
+v1 (Nov 2026) classes: `0 pallet, 1 pallet_label, 2 location_label, 3 beam, 4 upright` (`dataset/classes.txt`).
 
 * Input `[1,3,S,S]` float32 RGB 0..1, letterboxed: keep aspect ratio, pad with grey 114, image centred.
-* Output `[1,9,N]`: rows 0..3 = cx, cy, w, h; rows 4..8 = per-class scores (already sigmoid).
+* Output `[1,4+nc,N]` (v1: `[1,9,N]`, v2: `[1,11,8400]`): rows 0..3 = cx, cy, w, h; then per-class scores (already sigmoid).
   ONNX gives input-pixel coordinates; LiteRT gives normalised 0..1 (if max centre <= 2, multiply by S).
 * No NMS in the graph: take the best class per anchor, threshold, then per-class NMS (IoU 0.5).
   Thresholds used everywhere: pallet 0.45, beam/upright 0.35, labels 0.30 to 0.35.

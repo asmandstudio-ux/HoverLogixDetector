@@ -1,0 +1,35 @@
+{
+ "all": {
+  "images": 215,
+  "mAP50": 0.843,
+  "mAP50_95": 0.529,
+  "per_class_mAP50": {
+   "pallet": 0.962,
+   "pallet_label": 0.97,
+   "location_label": 0.786,
+   "beam": 0.635,
+   "upright": 0.864,
+   "pallet_base": 0.842
+  }
+ },
+ "droneims_hand_labelled": {
+  "images": 36,
+  "mAP50": 0.843,
+  "mAP50_95": 0.509,
+  "per_class_mAP50": {
+   "pallet": 0.964,
+   "pallet_label": 0.97,
+   "location_label": 0.778,
+   "beam": 0.636,
+   "upright": 0.864
+  }
+ },
+ "public_pallet_base": {
+  "images": 177,
+  "mAP50": 0.843,
+  "mAP50_95": 0.623,
+  "per_class_mAP50": {
+   "pallet_base": 0.843
+  }
+ }
+}

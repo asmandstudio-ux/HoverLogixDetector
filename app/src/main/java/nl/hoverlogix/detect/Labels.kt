@@ -5,15 +5,17 @@ import android.graphics.Color
 
 /** Class names (from assets/labels.txt) and one colour per class. */
 object Labels {
-    private var names: List<String> = listOf("pallet", "pallet_label", "location_label", "beam", "upright")
+    private var names: List<String> = listOf("pallet", "pallet_label", "location_label", "beam", "upright", "empty_location", "pallet_base")
 
-    // Same colours as the annotation previews: blue, pink, yellow, red-orange, green.
+    // Same colours as the annotation previews: blue, pink, yellow, red-orange, green, cyan, brown.
     private val colors = intArrayOf(
         Color.rgb(0, 120, 255),
         Color.rgb(255, 0, 255),
         Color.rgb(255, 220, 0),
         Color.rgb(255, 60, 0),
-        Color.rgb(0, 230, 120)
+        Color.rgb(0, 230, 120),
+        Color.rgb(90, 216, 255),
+        Color.rgb(200, 120, 60)
     )
 
     fun load(context: Context) {
@@ -40,7 +42,7 @@ object Settings {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putFloat("conf", v).apply()
 
     fun liveModel(context: Context): Detectors.Kind =
-        if (context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("liveAccurate", false))
+        if (context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("liveAccurate", true))
             Detectors.Kind.ACCURATE else Detectors.Kind.FAST
 
     fun setLiveModel(context: Context, kind: Detectors.Kind) =

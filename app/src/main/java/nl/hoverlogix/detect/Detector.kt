@@ -161,11 +161,15 @@ class Detector(context: Context, assetName: String, numThreads: Int = 4) : Close
     }
 }
 
-/** Shared, lazily created detectors. FAST = 640 px input, ACCURATE = 960 px input. */
+/**
+ * Shared, lazily created detectors. Both are YOLOv8n v2 (7 classes, 640 px input).
+ * ACCURATE = float32 (test mAP50 0.82 on DroneIMS photos), FAST = int8 (about 4x faster, mAP50 0.67:
+ * weaker on small location labels).
+ */
 object Detectors {
     enum class Kind(val asset: String, val label: String) {
-        FAST("hoverlogix_fast_640.tflite", "Fast 640"),
-        ACCURATE("hoverlogix_accurate_960.tflite", "Accurate 960")
+        FAST("hoverlogix_v2_640_int8.tflite", "Fast (int8)"),
+        ACCURATE("hoverlogix_v2_640_float32.tflite", "Accurate")
     }
 
     private val cache = HashMap<Kind, Detector>()
