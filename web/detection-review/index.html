@@ -864,21 +864,41 @@ async function initStorage() {
   if (!db) { $("saveNote").textContent = "This view cannot save."; return; }
   if (!S.canSave) $("saveNote").textContent = "You can look, but only editors can review.";
   const timer = setTimeout(() => { if (!S.recs.size) $("saveNote").textContent = "Saved photos can't be reached yet."; }, 10000);
-  db.collection("images").orderBy("created", "asc").limit(5000).onSnapshot((snap) => {
-    clearTimeout(timer);
-    let changedAny = false;
-    for (const ch of snap.docChanges()) {
-      const id = ch.doc.id, ex = S.recs.get(id);
-      if (ch.type === "removed") { if (ex && !snap.metadata.hasPendingWrites) { S.recs.delete(id); changedAny = true; } continue; }
-      const d = ch.doc.data(); if (!d) continue;
-      if (!ex) { S.recs.set(id, { id, ...d, img: null }); changedAny = true; }
-      else if ((d.updated || 0) > (ex.updated || 0) && ex !== S.current && !saving.get(id)) { Object.assign(ex, d); ex.grad = null; ex._ref = null; changedAny = true; }
-    }
-    if (changedAny) {
-      renderQueue(); renderStats(); if (!S.current) { const f = filtered()[0]; if (f) openRec(f); }
-      if ([...S.recs.values()].some((r) => !r.assetId && r.seedSize)) reconcileSeeded().catch(() => {});
-    }
-  }, () => { clearTimeout(timer); $("saveNote").textContent = "Saved photos could not be loaded."; });
+  /* A query returns at most 1000 documents, so photos load in chained windows of 1000 by
+     creation time; a full window opens the next one after its last photo. A photo leaves
+     the list only when no window holds it any more. */
+  const WIN = 1000, windows = [];
+  const held = (id) => windows.some((w) => w.ids.has(id));
+  function openWindow(after) {
+    const w = { after, ids: new Set(), last: after, next: false };
+    windows.push(w);
+    let q = db.collection("images");
+    if (after != null) q = q.where("created", ">", after);
+    q.orderBy("created", "asc").limit(WIN).onSnapshot((snap) => {
+      clearTimeout(timer);
+      let changedAny = false;
+      for (const ch of snap.docChanges()) {
+        const id = ch.doc.id, ex = S.recs.get(id);
+        if (ch.type === "removed") {
+          w.ids.delete(id);
+          if (ex && !held(id) && !snap.metadata.hasPendingWrites) { S.recs.delete(id); changedAny = true; }
+          continue;
+        }
+        const d = ch.doc.data(); if (!d) continue;
+        w.ids.add(id);
+        if (!ex) { S.recs.set(id, { id, ...d, img: null }); changedAny = true; }
+        else if ((d.updated || 0) > (ex.updated || 0) && ex !== S.current && !saving.get(id)) { Object.assign(ex, d); ex.grad = null; ex._ref = null; changedAny = true; }
+      }
+      const docs = snap.docs || [];
+      if (docs.length) w.last = docs[docs.length - 1].data()?.created ?? w.last;
+      if (!w.next && docs.length >= WIN && w.last != null) { w.next = true; openWindow(w.last); }
+      if (changedAny) {
+        renderQueue(); renderStats(); if (!S.current) { const f = filtered()[0]; if (f) openRec(f); }
+        if ([...S.recs.values()].some((r) => !r.assetId && r.seedSize)) reconcileSeeded().catch(() => {});
+      }
+    }, (e) => { clearTimeout(timer); $("saveNote").textContent = "Some saved photos could not be loaded" + (e && e.code ? ` (${e.code}).` : "."); });
+  }
+  openWindow(null);
 }
 
 /* keep track of the boxes a photo had when it was opened, to count deletions on approve */
