@@ -8,3 +8,4 @@ names:
   2: location_label
   3: beam
   4: upright
+  5: empty_location   # added for v2 (reviewed in Warehouse Detection Review)

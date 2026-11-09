@@ -14,6 +14,7 @@ This guide says what each part is, its exact data contract, and where it fits in
 | `pallet_safety/` | Python library + CLI: detection, lean check with the straight-box method, stack check | tested (`tests/`, CI) |
 | `app/` + Gradle files | Android app "HoverLogix Detect": live camera + video detection, correction editor, YOLO export | builds in CI (APK under Releases) |
 | `web/pallet-lean-check/` | Browser tool: upload photos, lean check, drag to correct, verdict override | live as a claude.ai artifact |
+| `web/detection-review/` + `training/HoverLogix_train.ipynb` | Training loop: review/correct model labels (adds `empty_location`), export, train on Colab | v2 loop, Nov 2026 |
 | `.github/workflows/` | `build-apk.yml` (APK release on app changes), `python-tests.yml` | green |
 
 ## 2. The detector
