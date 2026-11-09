@@ -408,7 +408,7 @@ function leanCheck(rec, box) {
 /* ================= records ================= */
 function serialize(rec) {
   return {
-    name: rec.name, key: rec.key, source: rec.source, assetId: rec.assetId, w: rec.w, h: rec.h, created: rec.created, updated: Date.now(),
+    name: rec.name, key: rec.key, source: rec.source, assetId: rec.assetId, seedSize: rec.seedSize || null, w: rec.w, h: rec.h, created: rec.created, updated: Date.now(),
     status: rec.status, model: rec.model || null, preds: rec.preds || [], uncertainty: rec.uncertainty ?? 1,
     labels: (rec.labels || []).map((l) => ({ id: l.id, c: l.c, b: l.b.map((v) => Math.round(v * 10) / 10), from: l.from, s: l.s ?? null, orig: l.orig || null, lean: l.lean || null, leanAuto: l.leanAuto || null })),
     reviewedAt: rec.reviewedAt || null, reviewedModel: rec.reviewedModel || null, edits: rec.edits || null,
@@ -429,8 +429,32 @@ async function saveRec(rec) {
   finally { const again = saving.get(rec.id) === "again"; saving.delete(rec.id); if (again) saveRec(rec); }
 }
 function loadImage(src) { return new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error("image could not be read")); im.src = src; }); }
+/* Photos seeded by Claude carry seedSize (their stored byte size) and sometimes no assetId yet:
+   link each to the stored file with that unique size that no other photo uses. */
+let _reconciling = null;
+function reconcileSeeded() {
+  if (_reconciling) return _reconciling;
+  _reconciling = (async () => {
+    const need = [...S.recs.values()].filter((r) => !r.assetId && r.seedSize);
+    if (!need.length || !S.assets) return;
+    const { assets } = await S.assets.list();
+    const used = new Set([...S.recs.values()].map((r) => r.assetId).filter(Boolean));
+    const bySize = new Map();
+    for (const a of assets) { if (used.has(a.id)) continue; const k = a.sizeBytes; bySize.set(k, bySize.has(k) ? null : a.id); }
+    let linked = 0;
+    for (const r of need) {
+      const id = bySize.get(r.seedSize);
+      if (!id) continue;
+      r.assetId = id; bySize.set(r.seedSize, null); linked++;
+      if (S.canSave) S.db.doc("images/" + r.id).update({ assetId: id }).catch(() => {});
+    }
+    if (linked) $("saveNote").textContent = `Linked ${linked} photos to their files.`;
+  })().finally(() => { setTimeout(() => { _reconciling = null; }, 0); });
+  return _reconciling;
+}
 async function ensureImage(rec) {
   if (rec.img) return rec.img;
+  if (!rec.assetId && rec.seedSize) { try { await reconcileSeeded(); } catch (e) {} }
   if (!rec.assetId) throw new Error("photo file missing");
   rec.img = await loadImage("/_blob/" + rec.assetId); return rec.img;
 }
@@ -850,7 +874,10 @@ async function initStorage() {
       if (!ex) { S.recs.set(id, { id, ...d, img: null }); changedAny = true; }
       else if ((d.updated || 0) > (ex.updated || 0) && ex !== S.current && !saving.get(id)) { Object.assign(ex, d); ex.grad = null; ex._ref = null; changedAny = true; }
     }
-    if (changedAny) { renderQueue(); renderStats(); if (!S.current) { const f = filtered()[0]; if (f) openRec(f); } }
+    if (changedAny) {
+      renderQueue(); renderStats(); if (!S.current) { const f = filtered()[0]; if (f) openRec(f); }
+      if ([...S.recs.values()].some((r) => !r.assetId && r.seedSize)) reconcileSeeded().catch(() => {});
+    }
   }, () => { clearTimeout(timer); $("saveNote").textContent = "Saved photos could not be loaded."; });
 }
 
