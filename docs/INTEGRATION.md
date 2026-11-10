@@ -148,6 +148,36 @@ Field names differ slightly from the Python result (`offsetMm` = `outsideMm`).
 
 Useful next classes: `pallet_base` (overhang + exact base corners), `damaged_pallet` / `damaged_load`, `empty_slot`.
 
+## 8. Guided pallet scan (app "Scan pallets", Nov 2026)
+
+Flow in `ScanActivity.kt`: live detection until a `pallet_label` and a `location_label` are both in view, then
+1. match location labels to the pallet (`ScanLogic.locationCandidates`): labels within the pallet's width on the beam
+   it stands on or the beam above it; stacked pallets count as one column; up to 4 candidates, matching ones first;
+2. zoom + focus on those location labels, take a full-resolution still, crop and read each (barcode, then text);
+3. zoom + focus on the pallet label, take a still, crop it, read barcodes and text;
+4. the user confirms or picks the location (or types it) and saves.
+
+Zoom rule (`ScanLogic.zoomFor`): a phone zooms around the frame centre, so the zoom is the largest that keeps the target
+in the picture (`0.44 / furthest edge from centre`), capped at 8x and at the lens maximum. After zooming, boxes are found
+again in the still (`relocate`) because hands move.
+
+Reading (`LabelReader`): ML Kit bundled barcode model, ZXing as fallback (pure Java, no Google services), ML Kit Latin OCR.
+Saved per scan (`ScanStore`, export from the home screen as `hoverlogix_scans_<date>.zip`):
+
+```
+scans/<time>/pallet_label.jpg     zoomed full-resolution crop: send this to server OCR / barcode decoding
+scans/<time>/location_<n>.jpg     candidate location labels
+scans/<time>/scan.json            {time, device, location_id, location_selected_candidate, location_zoom,
+                                   location_candidates:[{image, matched_to_pallet, barcodes:[{format,value}], text, reader}],
+                                   pallet_label:{image, width, height, zoom, barcodes, text, reader}}
+scans/scans.jsonl                 one line per scan
+```
+
+DJI RC Plus 2 / drone feed: the controller has no rear camera, so there the frames come from the drone through MSDK.
+Only two functions are device-specific: `zoomTo(target)` (drone: camera zoom ratio + gimbal to centre the target, which
+removes the off-centre zoom limit) and `grabStill()` (drone: high-resolution photo or a decoded video frame). Everything
+else (`ScanLogic`, `LabelReader`, `ScanStore`, the result screen) is reused as is.
+
 ## 7. Known limitations
 
 * Detector trained on one warehouse and 36 hand labels; small location labels are the weakest class.

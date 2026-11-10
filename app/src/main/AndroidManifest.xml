@@ -17,6 +17,7 @@
             </intent-filter>
         </activity>
         <activity android:name=".LiveActivity" android:screenOrientation="unspecified" />
+        <activity android:name=".ScanActivity" android:windowSoftInputMode="adjustResize" />
         <activity android:name=".VideoActivity" />
         <activity android:name=".EditorActivity" />
 

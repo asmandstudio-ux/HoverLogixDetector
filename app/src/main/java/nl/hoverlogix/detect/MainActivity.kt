@@ -14,6 +14,7 @@ import java.util.concurrent.Executors
 class MainActivity : AppCompatActivity() {
 
     private lateinit var countText: TextView
+    private lateinit var scanText: TextView
     private val io = Executors.newSingleThreadExecutor()
 
     private val pickVideo = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -31,6 +32,19 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         countText = findViewById(R.id.correctionCount)
 
+        scanText = findViewById(R.id.scanCount)
+        findViewById<Button>(R.id.btnScan).setOnClickListener {
+            startActivity(Intent(this, ScanActivity::class.java))
+        }
+        findViewById<Button>(R.id.btnExportScans).setOnClickListener { exportScans() }
+        findViewById<Button>(R.id.btnClearScans).setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Delete all saved scans?")
+                .setMessage("Export them first if you still need them.")
+                .setPositiveButton("Delete") { _, _ -> ScanStore.clear(this); refreshCount() }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
         findViewById<Button>(R.id.btnLive).setOnClickListener {
             startActivity(Intent(this, LiveActivity::class.java))
         }
@@ -67,6 +81,26 @@ class MainActivity : AppCompatActivity() {
         val n = CorrectionStore.count(this)
         countText.text = if (n == 0) "No corrected frames saved yet"
         else "$n corrected frame${if (n == 1) "" else "s"} saved, ready to export for retraining"
+        val k = ScanStore.count(this)
+        scanText.text = if (k == 0) "No pallet scans saved yet" else "$k pallet scan${if (k == 1) "" else "s"} saved"
+    }
+
+    private fun exportScans() {
+        io.execute {
+            val uri = ScanStore.exportZip(this)
+            runOnUiThread {
+                if (uri == null) {
+                    Toast.makeText(this, "No scans saved yet", Toast.LENGTH_SHORT).show()
+                } else {
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "application/zip"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    startActivity(Intent.createChooser(send, "Export scans"))
+                }
+            }
+        }
     }
 
     private fun exportCorrections() {

@@ -40,7 +40,28 @@ class OverlayView @JvmOverloads constructor(
         invalidate()
     }
 
-    fun clear() { detections = emptyList(); invalidate() }
+    fun clear() { detections = emptyList(); target = null; candidates = emptyList(); invalidate() }
+
+    /** Scan mode: the pallet label being scanned and the location labels matched to it (source pixels). */
+    private var target: RectF? = null
+    private var candidates: List<RectF> = emptyList()
+    private val markPaint = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 5f * density; isAntiAlias = true }
+
+    fun setMarks(target: RectF?, candidates: List<RectF>) {
+        this.target = target; this.candidates = candidates; invalidate()
+    }
+
+    private fun scale(): Float {
+        val sx = width.toFloat() / srcW
+        val sy = height.toFloat() / srcH
+        return if (scaleMode == ScaleMode.FILL) max(sx, sy) else min(sx, sy)
+    }
+
+    /** Converts a touch position on this view to pixel coordinates of the source frame. */
+    fun viewToSource(x: Float, y: Float): android.graphics.PointF {
+        val s = scale()
+        return android.graphics.PointF((x - (width - srcW * s) / 2f) / s, (y - (height - srcH * s) / 2f) / s)
+    }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -64,5 +85,9 @@ class OverlayView @JvmOverloads constructor(
             canvas.drawRect(r.left, ty, r.left + tw + 8, ty + th + 4, textBg)
             canvas.drawText(label, r.left + 4, ty + th - 1, textPaint)
         }
+        markPaint.color = Color.WHITE
+        target?.let { canvas.drawRect(it.left * s + ox, it.top * s + oy, it.right * s + ox, it.bottom * s + oy, markPaint) }
+        markPaint.color = Color.rgb(255, 220, 0)
+        for (c in candidates) canvas.drawRect(c.left * s + ox, c.top * s + oy, c.right * s + ox, c.bottom * s + oy, markPaint)
     }
 }

@@ -62,4 +62,11 @@ dependencies {
     // No Google Play Services needed, so it also runs on DJI controllers.
     // If Gradle cannot resolve this version, Android Studio will suggest the latest one.
     implementation("com.google.ai.edge.litert:litert:2.1.0")
+
+    // Guided scan: read barcodes and text from the zoomed label crops on the device.
+    // ML Kit with bundled models (no model download), ZXing as a pure-Java barcode fallback
+    // for devices without Google services such as DJI controllers.
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.zxing:core:3.5.3")
 }
