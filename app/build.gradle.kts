@@ -13,6 +13,8 @@ android {
         targetSdk = 34
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "1.0." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+        // Phones and DJI controllers are 64-bit ARM; leaving out the other ABIs keeps the APK small.
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     // Fixed signing key so every CI build installs over the previous one.
