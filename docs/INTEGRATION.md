@@ -161,6 +161,14 @@ Zoom rule (`ScanLogic.zoomFor`): a phone zooms around the frame centre, so the z
 in the picture (`0.44 / furthest edge from centre`), capped at 8x and at the lens maximum. After zooming, boxes are found
 again in the still (`relocate`) because hands move.
 
+Telephoto and aiming (build 8): each label gets a wanted total zoom so it fills a set share of the photo
+(`PALLET_LABEL_FILL` 0.4, `LOCATION_LABEL_FILL` 0.25, capped at `MAX_ZOOM` = 8 on phones). `findLenses` lists the back
+cameras with their magnification relative to the main lens; `planLens` picks the strongest lens not above the wanted zoom
+and the rest is digital. If the label can reach that zoom on the main lens while staying in the picture, the scan is
+automatic. Otherwise the app switches lens, shows an aiming frame, and fires a burst of 4 photos once the label is centred
+and steady (`aimAndBurst`); the sharpest photo that decodes is used. For the drone, use 4x to 6x optical zoom with the
+gimbal centring the label, so no aiming step is needed.
+
 Reading (`LabelReader`): ML Kit bundled barcode model, ZXing as fallback (pure Java, no Google services), ML Kit Latin OCR.
 Saved per scan (`ScanStore`, export from the home screen as `hoverlogix_scans_<date>.zip`):
 

@@ -21,7 +21,12 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraMetadata
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
+import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.DisplayOrientedMeteringPointFactory
 import androidx.camera.core.FocusMeteringAction
@@ -55,13 +60,21 @@ import java.util.concurrent.TimeUnit
  */
 class ScanActivity : AppCompatActivity() {
 
-    private enum class State { SEARCH, CAPTURING, RESULT }
+    private enum class State { SEARCH, CAPTURING, AIMING, RESULT }
+
+    /** One back camera. [magnification] is relative to the main lens (3.0 = a 3x telephoto). */
+    private class Lens(val info: CameraInfo, val id: String, val magnification: Float)
 
     companion object {
         /** Photos per label; the sharpest one that decodes is used. */
         const val BURST = 4
         /** Smallest pallet-label width in photo pixels at which barcodes are normally readable. */
         const val MIN_LABEL_PX = 300
+        /** Highest total zoom (lens magnification x digital zoom) used for a label photo. */
+        const val MAX_ZOOM = 8f
+        /** Share of the picture width a label should fill after zooming. */
+        const val PALLET_LABEL_FILL = 0.4f
+        const val LOCATION_LABEL_FILL = 0.25f
     }
 
     private lateinit var previewView: PreviewView
@@ -93,6 +106,13 @@ class ScanActivity : AppCompatActivity() {
     @Volatile private var frameRequest: CompletableFuture<Bitmap>? = null
     @Volatile private var cooldownUntil = 0L
     private var stableFrames = 0
+
+    private var provider: ProcessCameraProvider? = null
+    private var lenses: List<Lens> = emptyList()
+    @Volatile private var currentLens: Lens? = null
+    @Volatile private var aimClass = -1
+    @Volatile private var aimTrigger: CompletableFuture<Boolean>? = null
+    private var aimStable = 0
 
     // Result being shown
     private var locations: List<LocationRead> = emptyList()
@@ -136,7 +156,7 @@ class ScanActivity : AppCompatActivity() {
         confidence = Settings.confidence(this)
 
         autoScan.setOnCheckedChangeListener { _, on -> auto = on; stableFrames = 0 }
-        btnScan.setOnClickListener { startScan(null) }
+        btnScan.setOnClickListener { if (state == State.AIMING) aimTrigger?.complete(true) else startScan(null) }
         findViewById<Button>(R.id.btnRetake).setOnClickListener { backToSearch(1000) }
         findViewById<Button>(R.id.btnSave).setOnClickListener { saveResult() }
 
@@ -164,51 +184,100 @@ class ScanActivity : AppCompatActivity() {
     private fun startCamera() {
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
-            val provider = providerFuture.get()
-            val selector16x9 = ResolutionSelector.Builder()
-                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
-                .setResolutionStrategy(
-                    ResolutionStrategy(Size(1280, 720), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
-                )
-                .build()
-            val preview = Preview.Builder().setResolutionSelector(selector16x9).build()
-                .also { it.setSurfaceProvider(previewView.surfaceProvider) }
-            val analysis = ImageAnalysis.Builder()
-                .setResolutionSelector(selector16x9)
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                .build()
-                .also { it.setAnalyzer(analysisExecutor, ::analyze) }
-            // Photos for the label crops. First choice: the sensor's highest resolution (slower, but more
-            // real pixels on the label; digital zoom adds none). Then the normal maximum, then no photos.
-            fun captureCase(highRes: Boolean) = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                .setResolutionSelector(
-                    ResolutionSelector.Builder()
-                        .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
-                        .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
-                        .apply { if (highRes) setAllowedResolutionMode(ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE) }
-                        .build()
-                )
-                .build()
-            camera = null
-            imageCapture = null
-            for (highRes in listOf(true, false)) {
-                val capture = captureCase(highRes)
-                try {
-                    provider.unbindAll()
-                    camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis, capture)
-                    imageCapture = capture
-                    break
-                } catch (e: Exception) {
-                    // try the next option
-                }
-            }
-            if (camera == null) {
-                provider.unbindAll()
-                camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+            val p = providerFuture.get()
+            provider = p
+            lenses = findLenses(p)
+            try {
+                bind(lenses.firstOrNull())
+            } catch (e: Exception) {
+                status.text = "The camera could not be started: ${e.message}"
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    /**
+     * The back cameras this phone lets apps use, main lens first. Magnification comes from focal
+     * length and sensor size. Some phones hide their telephoto lenses from apps; then only the main
+     * lens is listed and zoom stays digital.
+     */
+    @androidx.annotation.OptIn(markerClass = [ExperimentalCamera2Interop::class])
+    private fun findLenses(p: ProcessCameraProvider): List<Lens> = runCatching {
+        val raw = p.availableCameraInfos.mapNotNull { info ->
+            val c2 = Camera2CameraInfo.from(info)
+            if (c2.getCameraCharacteristic(CameraCharacteristics.LENS_FACING) != CameraMetadata.LENS_FACING_BACK) return@mapNotNull null
+            val focal = c2.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: return@mapNotNull null
+            val size = c2.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: return@mapNotNull null
+            val diagonal = Math.hypot(size.width.toDouble(), size.height.toDouble()).toFloat()
+            if (diagonal <= 0f) return@mapNotNull null
+            Triple(info, c2.cameraId, focal / diagonal)
+        }
+        val main = raw.firstOrNull()?.third ?: return@runCatching emptyList<Lens>()
+        raw.map { Lens(it.first, it.second, it.third / main) }
+    }.getOrDefault(emptyList())
+
+    /** The lens with the most real magnification that does not exceed the wanted total zoom. */
+    private fun planLens(zoom: Float): Lens? =
+        lenses.filter { it.magnification >= 0.9f && it.magnification <= zoom * 1.15f }.maxByOrNull { it.magnification }
+            ?: lenses.firstOrNull()
+
+    /** Binds preview, detection and photo capture to [lens] (null = the default back camera). Main thread. */
+    private fun bind(lens: Lens?) {
+        val p = provider ?: return
+        val selector = lens?.info?.cameraSelector ?: CameraSelector.DEFAULT_BACK_CAMERA
+        val selector16x9 = ResolutionSelector.Builder()
+            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+            .setResolutionStrategy(
+                ResolutionStrategy(Size(1280, 720), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+            )
+            .build()
+        val preview = Preview.Builder().setResolutionSelector(selector16x9).build()
+            .also { it.setSurfaceProvider(previewView.surfaceProvider) }
+        val analysis = ImageAnalysis.Builder()
+            .setResolutionSelector(selector16x9)
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+            .build()
+            .also { it.setAnalyzer(analysisExecutor, ::analyze) }
+        // Photos for the label crops. First choice: the sensor's highest resolution (slower, but more
+        // real pixels on the label). Then the normal maximum, then no photos.
+        fun captureCase(highRes: Boolean) = ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .setResolutionSelector(
+                ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+                    .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                    .apply { if (highRes) setAllowedResolutionMode(ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE) }
+                    .build()
+            )
+            .build()
+        camera = null
+        imageCapture = null
+        for (highRes in listOf(true, false)) {
+            val capture = captureCase(highRes)
+            try {
+                p.unbindAll()
+                camera = p.bindToLifecycle(this, selector, preview, analysis, capture)
+                imageCapture = capture
+                break
+            } catch (e: Exception) {
+                // try the next option
+            }
+        }
+        if (camera == null) {
+            p.unbindAll()
+            camera = p.bindToLifecycle(this, selector, preview, analysis)
+        }
+        currentLens = lens
+    }
+
+    /** Switches lens from the scan thread and waits until the new camera delivers pictures. */
+    private fun switchLens(lens: Lens?): Boolean {
+        if (lens?.id == currentLens?.id) return true
+        val done = CompletableFuture<Boolean>()
+        runOnUiThread { done.complete(runCatching { bind(lens) }.isSuccess) }
+        val ok = runCatching { done.get(6, TimeUnit.SECONDS) }.getOrDefault(false)
+        if (ok) Thread.sleep(500)
+        return ok
     }
 
     // ---------------------------------------------------------------- 1. search
@@ -216,7 +285,8 @@ class ScanActivity : AppCompatActivity() {
     private fun analyze(image: ImageProxy) {
         try {
             val request = frameRequest
-            if (state != State.SEARCH && request == null) return
+            val st = state
+            if (st != State.SEARCH && st != State.AIMING && request == null) return
             val bmp = LiveActivity.rotate(image.toBitmap(), image.imageInfo.rotationDegrees)
             if (request != null) {           // a still was asked for and ImageCapture is not available
                 frameRequest = null
@@ -225,13 +295,15 @@ class ScanActivity : AppCompatActivity() {
             }
             val dets = detect(bmp)
             lastDets = dets; lastW = bmp.width; lastH = bmp.height
+            if (st == State.AIMING) { aim(dets, bmp.width, bmp.height); return }
             val labels = dets.filter { it.cls == ScanLogic.PALLET_LABEL }
             val hasLocation = dets.any { it.cls == ScanLogic.LOCATION_LABEL }
             val target = ScanLogic.centreMost(labels, bmp.width, bmp.height)
             val cands = if (target != null) ScanLogic.locationCandidates(target, dets) else emptyList()
 
-            // Real pixels the pallet label will have in the photo (digital zoom adds none).
-            val labelPx = if (target != null) (target.box.width() / bmp.width * photoWidth(bmp.width < bmp.height)).toInt() else 0
+            // A telephoto lens multiplies the real pixels; digital zoom does not.
+            val optical = (lenses.maxOfOrNull { it.magnification } ?: 1f).coerceIn(1f, MAX_ZOOM)
+            val labelPx = if (target != null) (target.box.width() / bmp.width * photoWidth(bmp.width < bmp.height) * optical).toInt() else 0
             val closeEnough = labelPx == 0 || labelPx >= MIN_LABEL_PX
             stableFrames = if (target != null && hasLocation && closeEnough) stableFrames + 1 else 0
             val matching = cands.count { it.belongs }
@@ -255,6 +327,28 @@ class ScanActivity : AppCompatActivity() {
         } finally {
             image.close()
         }
+    }
+
+    /** While zoomed in: guides the user onto the label and fires the burst once it is centred and steady. */
+    private fun aim(dets: List<Detection>, w: Int, h: Int) {
+        val t = ScanLogic.centreMost(dets.filter { it.cls == aimClass }, w, h)
+        val aimed = t != null && t.box.left > 0.02f * w && t.box.right < 0.98f * w && t.box.top > 0.02f * h && t.box.bottom < 0.98f * h &&
+            Math.abs(t.box.centerX() - w / 2f) < 0.3f * w && Math.abs(t.box.centerY() - h / 2f) < 0.3f * h
+        aimStable = if (aimed) aimStable + 1 else 0
+        val what = if (aimClass == ScanLogic.LOCATION_LABEL) "location label on the beam" else "pallet label"
+        val text = when {
+            t == null -> "Zoomed in. Aim the frame at the $what, or press Take photo now"
+            !aimed -> "Bring the $what into the middle of the frame"
+            else -> "Hold steady…"
+        }
+        runOnUiThread {
+            if (state == State.AIMING) {
+                overlay.setDetections(dets, w, h)
+                overlay.setMarks(t?.box, emptyList())
+                status.text = text
+            }
+        }
+        if (aimStable >= 3) aimTrigger?.complete(true)
     }
 
     /** Width in pixels of an upright photo from the capture stream (falls back to the preview frame size). */
@@ -327,39 +421,125 @@ class ScanActivity : AppCompatActivity() {
         return shots[0].crop to first
     }
 
+    /**
+     * Switches to the lens that gives [zoom] with the most real detail, lets the user aim at a label of
+     * class [cls] and returns a burst of photos. Used when the label needs more zoom than it can get
+     * while staying in the picture (a phone zooms around the middle of the frame).
+     */
+    private fun aimAndBurst(cls: Int, zoom: Float, diag: JSONObject, key: String): List<Still> {
+        val lens = planLens(zoom)
+        val used = if (switchLens(lens)) lens else { switchLens(lenses.firstOrNull()); lenses.firstOrNull() }
+        val magnification = used?.magnification ?: 1f
+        val cam = camera
+        val maxRatio = cam?.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 1f
+        val ratio = (zoom / magnification).coerceIn(1f, maxRatio)
+        runCatching { cam?.cameraControl?.setZoomRatio(ratio)?.get(2, TimeUnit.SECONDS) }
+        diag.put("${key}_lens", "%.1fx".format(magnification))
+        diag.put("${key}_digital_zoom", ratio.toDouble())
+
+        val trigger = CompletableFuture<Boolean>()
+        aimClass = cls; aimStable = 0; aimTrigger = trigger
+        ui { overlay.clear(); overlay.reticle = true; btnScan.text = "Take photo now"; autoScan.visibility = View.INVISIBLE }
+        state = State.AIMING
+        val go = try {
+            trigger.get(60, TimeUnit.SECONDS)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            false
+        } finally {
+            state = State.CAPTURING
+            aimTrigger = null
+            ui { overlay.reticle = false; overlay.clear(); btnScan.text = "Scan now"; autoScan.visibility = View.VISIBLE }
+        }
+        if (!go) throw CancelledScan()
+
+        // Focus on the label that was aimed at (or the middle of the frame).
+        val t = ScanLogic.centreMost(lastDets.filter { it.cls == cls }, lastW, lastH)
+        focusAt(t?.let { it.box.centerX() / lastW } ?: 0.5f, t?.let { it.box.centerY() / lastH } ?: 0.5f)
+        ui { status.text = "Taking $BURST photos. Hold steady…" }
+        return burst()
+    }
+
+    private class CancelledScan : RuntimeException()
+
+    /**
+     * Crops the labels of class [cls] from an aimed burst: the labels found in the first photo
+     * (nearest the middle first, at most four) are followed through the other photos. When the
+     * detector finds none, the whole middle of the photo is kept so the readers can still try.
+     */
+    private fun cropAimed(stills: List<Still>, cls: Int, margin: Float, minWidth: Int): List<List<Shot>> {
+        val first = stills.first()
+        val (small, _) = first.preview()
+        val found = detect(small).filter { it.cls == cls }
+            .sortedBy { Math.abs(it.box.centerX() - small.width / 2f) / small.width + Math.abs(it.box.centerY() - small.height / 2f) / small.height }
+            .take(ScanLogic.MAX_CANDIDATES)
+            .map { ScanLogic.normalise(it.box, small.width, small.height) }
+        val expected = found.ifEmpty { listOf(RectF(0.12f, 0.2f, 0.88f, 0.8f)) }
+        val aspect = first.width.toFloat() / first.height
+        return cropBurst(stills, expected, cls, if (found.isEmpty()) 0f else margin, minWidth, aspect).filter { it.isNotEmpty() }
+    }
+
     private fun runScan(target: Detection, cands: List<LocationCandidate>, w: Int, h: Int) {
         try {
             val frameAspect = w.toFloat() / h
             val diag = JSONObject()
+            diag.put("lenses", JSONArray(lenses.map { "%.1fx".format(it.magnification) }))
             val found = mutableListOf<LocationRead>()
             var zLoc = 1f
+            var locPhotos = 0
             if (cands.isNotEmpty()) {
-                ui { overlay.clear(); status.text = "Zooming in on the location label…" }
                 val boxes = cands.map { ScanLogic.normalise(it.box, w, h) }
-                // Zoom on the labels that belong to this pallet; the others are read from the same photos.
-                val focusOn = cands.indices.filter { cands[it].belongs }.map { boxes[it] }.ifEmpty { boxes }
-                zLoc = zoomTo(ScanLogic.union(focusOn))
-                ui { status.text = "Taking $BURST photos of the location label. Hold steady…" }
-                val stills = burst()
-                ui { status.text = "Reading the location label…" }
-                val crops = cropBurst(stills, boxes.map { ScanLogic.zoomRect(it, zLoc) }, ScanLogic.LOCATION_LABEL, 0.25f, 700, frameAspect)
-                crops.forEachIndexed { i, shots ->
-                    val (img, read) = readBurst(shots) ?: return@forEachIndexed
-                    found += LocationRead(img, read, cands[i].belongs)
+                val mine = cands.indices.filter { cands[it].belongs }.map { boxes[it] }.ifEmpty { boxes }
+                val group = ScanLogic.union(mine)
+                zLoc = (LOCATION_LABEL_FILL / mine.map { it.width() }.average().toFloat().coerceAtLeast(0.01f)).coerceIn(1f, MAX_ZOOM)
+                val reachable = ScanLogic.zoomFor(group, MAX_ZOOM)
+                if ((planLens(zLoc)?.magnification ?: 1f) < 1.8f && reachable >= 0.75f * zLoc) {
+                    // Close enough: zoom automatically, the labels stay in the picture.
+                    switchLens(lenses.firstOrNull())
+                    ui { overlay.clear(); status.text = "Zooming in on the location label…" }
+                    zLoc = zoomTo(group)
+                    ui { status.text = "Taking $BURST photos of the location label. Hold steady…" }
+                    val stills = burst()
+                    locPhotos = stills.size
+                    ui { status.text = "Reading the location label…" }
+                    cropBurst(stills, boxes.map { ScanLogic.zoomRect(it, zLoc) }, ScanLogic.LOCATION_LABEL, 0.25f, 700, frameAspect)
+                        .forEachIndexed { i, shots ->
+                            val (img, read) = readBurst(shots) ?: return@forEachIndexed
+                            found += LocationRead(img, read, cands[i].belongs)
+                        }
+                    diag.put("location_lens", "1.0x"); diag.put("location_digital_zoom", zLoc.toDouble())
+                } else {
+                    val stills = aimAndBurst(ScanLogic.LOCATION_LABEL, zLoc, diag, "location")
+                    locPhotos = stills.size
+                    ui { status.text = "Reading the location label…" }
+                    cropAimed(stills, ScanLogic.LOCATION_LABEL, 0.25f, 700).forEachIndexed { i, shots ->
+                        val (img, read) = readBurst(shots) ?: return@forEachIndexed
+                        found += LocationRead(img, read, i == 0)   // the label that was aimed at comes first
+                    }
                 }
-                diag.put("location_photos", stills.size)
-                diag.put("location_sharpness", JSONArray(crops.firstOrNull()?.map { it.sharpness.toInt() } ?: emptyList<Int>()))
+                diag.put("location_photos", locPhotos)
             }
 
-            ui { overlay.clear(); status.text = "Zooming in on the pallet label…" }
             val labelBox = ScanLogic.normalise(target.box, w, h)
-            val zPal = zoomTo(labelBox)
-            ui { status.text = "Taking $BURST photos of the pallet label. Hold steady…" }
-            val stills = burst()
-            ui { status.text = "Reading the pallet label…" }
-            val shots = cropBurst(stills, listOf(ScanLogic.zoomRect(labelBox, zPal)), ScanLogic.PALLET_LABEL, 0.06f, 0, frameAspect)[0]
+            var zPal = (PALLET_LABEL_FILL / labelBox.width().coerceAtLeast(0.01f)).coerceIn(1f, MAX_ZOOM)
+            val reachable = ScanLogic.zoomFor(labelBox, MAX_ZOOM)
+            val stills: List<Still>
+            val shots: List<Shot>
+            if ((planLens(zPal)?.magnification ?: 1f) < 1.8f && reachable >= 0.75f * zPal) {
+                switchLens(lenses.firstOrNull())
+                ui { overlay.clear(); status.text = "Zooming in on the pallet label…" }
+                zPal = zoomTo(labelBox)
+                ui { status.text = "Taking $BURST photos of the pallet label. Hold steady…" }
+                stills = burst()
+                ui { status.text = "Reading the pallet label…" }
+                shots = cropBurst(stills, listOf(ScanLogic.zoomRect(labelBox, zPal)), ScanLogic.PALLET_LABEL, 0.06f, 0, frameAspect)[0]
+                diag.put("pallet_lens", "1.0x"); diag.put("pallet_digital_zoom", zPal.toDouble())
+            } else {
+                stills = aimAndBurst(ScanLogic.PALLET_LABEL, zPal, diag, "pallet")
+                ui { status.text = "Reading the pallet label…" }
+                shots = cropAimed(stills, ScanLogic.PALLET_LABEL, 0.06f, 0).firstOrNull() ?: emptyList()
+            }
             val result = readBurst(shots)
-            resetZoom()
+            restoreMainLens()
 
             val s0 = stills.firstOrNull()
             diag.put("photo_width", s0?.width ?: 0)
@@ -368,17 +548,39 @@ class ScanActivity : AppCompatActivity() {
             diag.put("pallet_photos", stills.size)
             diag.put("pallet_sharpness", JSONArray(shots.map { it.sharpness.toInt() }))
             diag.put("pallet_label_px", result?.first?.width ?: 0)
-            diag.put("max_zoom", (camera?.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 1f).toDouble())
-            val summary = "Photo ${s0?.width ?: 0}×${s0?.height ?: 0} (${s0?.source ?: "none"}) · zoom ${"%.1f".format(zLoc)}x / ${"%.1f".format(zPal)}x · " +
-                "pallet label ${result?.first?.width ?: 0} px wide · sharpest of ${shots.size} (scores ${shots.joinToString(", ") { it.sharpness.toInt().toString() }})"
+            val summary = "Lenses ${lenses.joinToString(" ") { "%.1fx".format(it.magnification) }.ifEmpty { "main only" }} · " +
+                "location ${"%.1f".format(zLoc)}x on ${diag.optString("location_lens", "-")} lens · pallet ${"%.1f".format(zPal)}x on ${diag.optString("pallet_lens", "-")} lens · " +
+                "photo ${s0?.width ?: 0}×${s0?.height ?: 0} (${s0?.source ?: "none"}) · pallet label ${result?.first?.width ?: 0} px wide · " +
+                "sharpest of ${shots.size} (scores ${shots.joinToString(", ") { it.sharpness.toInt().toString() }})"
             ui { showResult(found, result?.first, result?.second, zLoc, zPal, diag, summary) }
+        } catch (e: CancelledScan) {
+            restoreMainLens()
+            ui { backToSearch(1500) }
         } catch (e: Exception) {
-            resetZoom()
+            restoreMainLens()
             ui {
                 Toast.makeText(this, "Scan failed: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
                 backToSearch(1500)
             }
         }
+    }
+
+    private fun restoreMainLens() {
+        resetZoom()
+        switchLens(lenses.firstOrNull())
+        resetZoom()
+    }
+
+    /** Focuses and meters on a point of the live picture (0..1) and waits for the lens to settle. */
+    private fun focusAt(x: Float, y: Float) {
+        val cam = camera ?: return
+        val display = previewView.display ?: return
+        val point = DisplayOrientedMeteringPointFactory(display, cam.cameraInfo, 1f, 1f)
+            .createPoint(x.coerceIn(0.05f, 0.95f), y.coerceIn(0.05f, 0.95f))
+        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+            .setAutoCancelDuration(6, TimeUnit.SECONDS).build()
+        runCatching { cam.cameraControl.startFocusAndMetering(action).get(2500, TimeUnit.MILLISECONDS) }
+        Thread.sleep(200)
     }
 
     /**
@@ -564,7 +766,11 @@ class ScanActivity : AppCompatActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (state == State.RESULT) backToSearch(1000) else super.onBackPressed()
+        when (state) {
+            State.RESULT -> backToSearch(1000)
+            State.AIMING -> aimTrigger?.complete(false)
+            else -> super.onBackPressed()
+        }
     }
 
     override fun onDestroy() {

@@ -47,6 +47,10 @@ class OverlayView @JvmOverloads constructor(
     private var candidates: List<RectF> = emptyList()
     private val markPaint = Paint().apply { style = Paint.Style.STROKE; strokeWidth = 5f * density; isAntiAlias = true }
 
+    /** Scan mode: show the aiming frame while the user points the zoomed camera at a label. */
+    var reticle = false
+        set(value) { field = value; invalidate() }
+
     fun setMarks(target: RectF?, candidates: List<RectF>) {
         this.target = target; this.candidates = candidates; invalidate()
     }
@@ -65,6 +69,11 @@ class OverlayView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (reticle) {
+            // Aiming frame: the label should sit inside it.
+            markPaint.color = Color.argb(200, 255, 255, 255)
+            canvas.drawRoundRect(width * 0.2f, height * 0.3f, width * 0.8f, height * 0.7f, 16f * density, 16f * density, markPaint)
+        }
         if (detections.isEmpty()) return
         val sx = width.toFloat() / srcW
         val sy = height.toFloat() / srcH
