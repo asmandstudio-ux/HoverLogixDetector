@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.ImageFormat
 import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
@@ -35,6 +36,8 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -54,6 +57,13 @@ class ScanActivity : AppCompatActivity() {
 
     private enum class State { SEARCH, CAPTURING, RESULT }
 
+    companion object {
+        /** Photos per label; the sharpest one that decodes is used. */
+        const val BURST = 4
+        /** Smallest pallet-label width in photo pixels at which barcodes are normally readable. */
+        const val MIN_LABEL_PX = 300
+    }
+
     private lateinit var previewView: PreviewView
     private lateinit var overlay: OverlayView
     private lateinit var status: TextView
@@ -66,6 +76,7 @@ class ScanActivity : AppCompatActivity() {
     private lateinit var palletImage: ImageView
     private lateinit var palletCodes: TextView
     private lateinit var palletText: TextView
+    private lateinit var diagText: TextView
 
     private lateinit var analysisExecutor: ExecutorService
     private lateinit var scanExecutor: ExecutorService
@@ -90,6 +101,7 @@ class ScanActivity : AppCompatActivity() {
     private var palletRead: LabelRead? = null
     private var zoomLocation = 1f
     private var zoomPallet = 1f
+    private var diagnostics: JSONObject? = null
 
     private val requestCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startCamera() else {
@@ -114,6 +126,7 @@ class ScanActivity : AppCompatActivity() {
         palletImage = findViewById(R.id.palletImage)
         palletCodes = findViewById(R.id.palletCodes)
         palletText = findViewById(R.id.palletText)
+        diagText = findViewById(R.id.diagText)
 
         previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
         overlay.scaleMode = OverlayView.ScaleMode.FILL
@@ -166,23 +179,34 @@ class ScanActivity : AppCompatActivity() {
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .build()
                 .also { it.setAnalyzer(analysisExecutor, ::analyze) }
-            // Full-resolution stills: the zoomed label crops come from these.
-            val capture = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+            // Photos for the label crops. First choice: the sensor's highest resolution (slower, but more
+            // real pixels on the label; digital zoom adds none). Then the normal maximum, then no photos.
+            fun captureCase(highRes: Boolean) = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                 .setResolutionSelector(
                     ResolutionSelector.Builder()
                         .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+                        .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                        .apply { if (highRes) setAllowedResolutionMode(ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE) }
                         .build()
                 )
                 .build()
-            provider.unbindAll()
-            try {
-                camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis, capture)
-                imageCapture = capture
-            } catch (e: Exception) {
+            camera = null
+            imageCapture = null
+            for (highRes in listOf(true, false)) {
+                val capture = captureCase(highRes)
+                try {
+                    provider.unbindAll()
+                    camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis, capture)
+                    imageCapture = capture
+                    break
+                } catch (e: Exception) {
+                    // try the next option
+                }
+            }
+            if (camera == null) {
                 provider.unbindAll()
                 camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
-                imageCapture = null
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -205,13 +229,18 @@ class ScanActivity : AppCompatActivity() {
             val hasLocation = dets.any { it.cls == ScanLogic.LOCATION_LABEL }
             val target = ScanLogic.centreMost(labels, bmp.width, bmp.height)
             val cands = if (target != null) ScanLogic.locationCandidates(target, dets) else emptyList()
-            stableFrames = if (target != null && hasLocation) stableFrames + 1 else 0
 
+            // Real pixels the pallet label will have in the photo (digital zoom adds none).
+            val labelPx = if (target != null) (target.box.width() / bmp.width * photoWidth(bmp.width < bmp.height)).toInt() else 0
+            val closeEnough = labelPx == 0 || labelPx >= MIN_LABEL_PX
+            stableFrames = if (target != null && hasLocation && closeEnough) stableFrames + 1 else 0
+            val matching = cands.count { it.belongs }
             val text = when {
                 target == null && !hasLocation -> "Point at a pallet so its label and the location label on the beam are in view"
                 target == null -> "Location label found. Bring the pallet label into view"
+                !closeEnough -> "Move closer: the pallet label would be only $labelPx px wide in the photo ($MIN_LABEL_PX needed for a sharp read)"
                 !hasLocation -> "Pallet label found. Bring the location label on the beam into view"
-                else -> "Pallet label and ${cands.count { it.belongs }.let { if (it == 0) "no matching" else "$it matching" }} location label${if (cands.count { it.belongs } == 1) "" else "s"}. Hold steady"
+                else -> "Pallet label and ${if (matching == 0) "no matching" else "$matching matching"} location label${if (matching == 1) "" else "s"}. Hold steady"
             }
             runOnUiThread {
                 if (state == State.SEARCH) {
@@ -228,12 +257,18 @@ class ScanActivity : AppCompatActivity() {
         }
     }
 
+    /** Width in pixels of an upright photo from the capture stream (falls back to the preview frame size). */
+    private fun photoWidth(portrait: Boolean): Int {
+        val r = imageCapture?.resolutionInfo?.resolution ?: return lastW
+        return if (portrait) minOf(r.width, r.height) else maxOf(r.width, r.height)
+    }
+
     private fun detect(bmp: Bitmap): List<Detection> {
         val detector = Detectors.get(this, Detectors.Kind.ACCURATE)
         return synchronized(detector) { detector.detect(bmp, confidence) }
     }
 
-    // ---------------------------------------------------------------- 2. zoom, capture, read
+    // ---------------------------------------------------------------- 2. zoom, burst, read
 
     @Synchronized
     private fun startScan(tapped: Detection?) {
@@ -252,39 +287,91 @@ class ScanActivity : AppCompatActivity() {
         scanExecutor.execute { runScan(target, cands, w, h) }
     }
 
+    /** The label crops of one target from every photo of a burst, sharpest first. */
+    private class Shot(val crop: Bitmap, val sharpness: Double)
+
+    /**
+     * Finds each expected label (normalised, already zoomed) in every photo of the burst and cuts it
+     * out at full resolution. Returns, per label, its crops sorted sharpest first.
+     */
+    private fun cropBurst(stills: List<Still>, expected: List<RectF>, cls: Int, margin: Float, minWidth: Int, frameAspect: Float): List<List<Shot>> {
+        val out = expected.map { mutableListOf<Shot>() }
+        for (still in stills) {
+            val (small, scale) = still.preview()
+            val dets = detect(small).map {
+                Detection(it.cls, it.score, RectF(it.box.left / scale, it.box.top / scale, it.box.right / scale, it.box.bottom / scale))
+            }
+            val taken = mutableSetOf<Detection>()
+            val aspect = still.width.toFloat() / still.height
+            expected.forEachIndexed { i, e ->
+                val at = ScanLogic.relocate(ScanLogic.toStillAspect(e, frameAspect, aspect), dets, cls, still.width, still.height, taken)
+                val crop = still.crop(at, margin, minWidth) ?: return@forEachIndexed
+                out[i] += Shot(crop, ScanLogic.sharpness(crop))
+            }
+        }
+        return out.map { l -> l.sortedByDescending { it.sharpness } }
+    }
+
+    /**
+     * Reads a label from its burst crops: text from the sharpest crop, barcodes from the first crop
+     * that decodes (a slightly softer photo sometimes decodes when the sharpest does not).
+     */
+    private fun readBurst(shots: List<Shot>): Pair<Bitmap, LabelRead>? {
+        if (shots.isEmpty()) return null
+        val first = LabelReader.read(shots[0].crop)
+        if (first.codes.isNotEmpty()) return shots[0].crop to first
+        for (s in shots.drop(1)) {
+            val r = LabelReader.read(s.crop, wantText = false)
+            if (r.codes.isNotEmpty()) return s.crop to LabelRead(r.codes, first.text, r.engine)
+        }
+        return shots[0].crop to first
+    }
+
     private fun runScan(target: Detection, cands: List<LocationCandidate>, w: Int, h: Int) {
         try {
+            val frameAspect = w.toFloat() / h
+            val diag = JSONObject()
             val found = mutableListOf<LocationRead>()
             var zLoc = 1f
             if (cands.isNotEmpty()) {
                 ui { overlay.clear(); status.text = "Zooming in on the location label…" }
                 val boxes = cands.map { ScanLogic.normalise(it.box, w, h) }
-                // Zoom on the labels that belong to this pallet; the others are read from the same still.
+                // Zoom on the labels that belong to this pallet; the others are read from the same photos.
                 val focusOn = cands.indices.filter { cands[it].belongs }.map { boxes[it] }.ifEmpty { boxes }
                 zLoc = zoomTo(ScanLogic.union(focusOn))
-                val still = grabStill()
+                ui { status.text = "Taking $BURST photos of the location label. Hold steady…" }
+                val stills = burst()
                 ui { status.text = "Reading the location label…" }
-                val dets = detect(still)
-                val taken = mutableSetOf<Detection>()
-                cands.forEachIndexed { i, c ->
-                    val at = ScanLogic.relocate(ScanLogic.zoomRect(boxes[i], zLoc), dets, ScanLogic.LOCATION_LABEL, still.width, still.height, taken)
-                    val crop = ScanLogic.crop(still, at, 0.25f, 700) ?: return@forEachIndexed
-                    found += LocationRead(crop, LabelReader.read(crop), c.belongs)
+                val crops = cropBurst(stills, boxes.map { ScanLogic.zoomRect(it, zLoc) }, ScanLogic.LOCATION_LABEL, 0.25f, 700, frameAspect)
+                crops.forEachIndexed { i, shots ->
+                    val (img, read) = readBurst(shots) ?: return@forEachIndexed
+                    found += LocationRead(img, read, cands[i].belongs)
                 }
-                still.recycle()
+                diag.put("location_photos", stills.size)
+                diag.put("location_sharpness", JSONArray(crops.firstOrNull()?.map { it.sharpness.toInt() } ?: emptyList<Int>()))
             }
 
             ui { overlay.clear(); status.text = "Zooming in on the pallet label…" }
             val labelBox = ScanLogic.normalise(target.box, w, h)
             val zPal = zoomTo(labelBox)
-            val still = grabStill()
+            ui { status.text = "Taking $BURST photos of the pallet label. Hold steady…" }
+            val stills = burst()
             ui { status.text = "Reading the pallet label…" }
-            val at = ScanLogic.relocate(ScanLogic.zoomRect(labelBox, zPal), detect(still), ScanLogic.PALLET_LABEL, still.width, still.height, mutableSetOf())
-            val crop = ScanLogic.crop(still, at, 0.06f, 0)
-            val read = crop?.let { LabelReader.read(it) }
-            if (crop !== still) still.recycle()
+            val shots = cropBurst(stills, listOf(ScanLogic.zoomRect(labelBox, zPal)), ScanLogic.PALLET_LABEL, 0.06f, 0, frameAspect)[0]
+            val result = readBurst(shots)
             resetZoom()
-            ui { showResult(found, crop, read, zLoc, zPal) }
+
+            val s0 = stills.firstOrNull()
+            diag.put("photo_width", s0?.width ?: 0)
+            diag.put("photo_height", s0?.height ?: 0)
+            diag.put("photo_source", s0?.source ?: "none")
+            diag.put("pallet_photos", stills.size)
+            diag.put("pallet_sharpness", JSONArray(shots.map { it.sharpness.toInt() }))
+            diag.put("pallet_label_px", result?.first?.width ?: 0)
+            diag.put("max_zoom", (camera?.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 1f).toDouble())
+            val summary = "Photo ${s0?.width ?: 0}×${s0?.height ?: 0} (${s0?.source ?: "none"}) · zoom ${"%.1f".format(zLoc)}x / ${"%.1f".format(zPal)}x · " +
+                "pallet label ${result?.first?.width ?: 0} px wide · sharpest of ${shots.size} (scores ${shots.joinToString(", ") { it.sharpness.toInt().toString() }})"
+            ui { showResult(found, result?.first, result?.second, zLoc, zPal, diag, summary) }
         } catch (e: Exception) {
             resetZoom()
             ui {
@@ -309,7 +396,7 @@ class ScanActivity : AppCompatActivity() {
             val point = DisplayOrientedMeteringPointFactory(display, cam.cameraInfo, 1f, 1f)
                 .createPoint(z.centerX().coerceIn(0.05f, 0.95f), z.centerY().coerceIn(0.05f, 0.95f))
             val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
-                .setAutoCancelDuration(4, TimeUnit.SECONDS).build()
+                .setAutoCancelDuration(6, TimeUnit.SECONDS).build()
             runCatching { cam.cameraControl.startFocusAndMetering(action).get(2500, TimeUnit.MILLISECONDS) }
         }
         Thread.sleep(250)
@@ -321,15 +408,36 @@ class ScanActivity : AppCompatActivity() {
         runCatching { camera?.cameraControl?.cancelFocusAndMetering() }
     }
 
-    /** A full-resolution still at the current zoom; falls back to the next preview frame. */
-    private fun grabStill(): Bitmap {
+    /** Several photos in a row at the current zoom. Hands shake and focus hunts, so one of them is usually sharper. */
+    private fun burst(): List<Still> {
+        val stills = mutableListOf<Still>()
+        val started = SystemClock.elapsedRealtime()
+        for (i in 0 until BURST) {
+            // High-resolution photos are slow on some devices: stop after 6 s but keep at least two.
+            if (i >= 2 && SystemClock.elapsedRealtime() - started > 6000) break
+            runCatching { grabStill() }.getOrNull()?.let { stills += it }
+        }
+        if (stills.isEmpty()) throw IllegalStateException("the camera did not return a photo")
+        return stills
+    }
+
+    /** A full-resolution photo at the current zoom; falls back to the next preview frame. */
+    private fun grabStill(): Still {
         val capture = imageCapture
         if (capture != null) {
-            val future = CompletableFuture<Bitmap>()
+            val future = CompletableFuture<Still>()
             capture.takePicture(captureExecutor, object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     try {
-                        future.complete(LiveActivity.rotate(image.toBitmap(), image.imageInfo.rotationDegrees))
+                        val rotation = image.imageInfo.rotationDegrees
+                        if (image.format == ImageFormat.JPEG) {
+                            val buf = image.planes[0].buffer
+                            val bytes = ByteArray(buf.remaining())
+                            buf.get(bytes)
+                            future.complete(Still.fromJpeg(bytes, image.cropRect, rotation))
+                        } else {
+                            future.complete(Still.fromBitmap(LiveActivity.rotate(image.toBitmap(), rotation), "photo"))
+                        }
                     } catch (e: Throwable) {
                         future.completeExceptionally(e)
                     } finally {
@@ -348,12 +456,12 @@ class ScanActivity : AppCompatActivity() {
         }
         val future = CompletableFuture<Bitmap>()
         frameRequest = future
-        return future.get(4, TimeUnit.SECONDS)
+        return Still.fromBitmap(future.get(4, TimeUnit.SECONDS), "preview frame, low resolution")
     }
 
     // ---------------------------------------------------------------- 3. confirm and save
 
-    private fun showResult(found: List<LocationRead>, crop: Bitmap?, read: LabelRead?, zLoc: Float, zPal: Float) {
+    private fun showResult(found: List<LocationRead>, crop: Bitmap?, read: LabelRead?, zLoc: Float, zPal: Float, diag: JSONObject, summary: String) {
         state = State.RESULT
         locations = found; palletCrop = crop; palletRead = read; zoomLocation = zLoc; zoomPallet = zPal
         // Preselect the best-ranked label that was actually read.
@@ -376,6 +484,8 @@ class ScanActivity : AppCompatActivity() {
             else -> read.codes.joinToString("\n") { "${it.format}: ${it.value}" }
         }
         palletText.text = read?.text ?: ""
+        diagnostics = diag
+        diagText.text = summary
         resultPanel.scrollTo(0, 0)
         resultPanel.visibility = View.VISIBLE
         status.text = "Check the result"
@@ -428,8 +538,9 @@ class ScanActivity : AppCompatActivity() {
         val locs = locations
         val sel = selected
         val read = palletRead
+        val diag = diagnostics
         scanExecutor.execute {
-            val ok = runCatching { ScanStore.save(this, id, sel, locs, crop, read, zoomLocation, zoomPallet) }.isSuccess
+            val ok = runCatching { ScanStore.save(this, id, sel, locs, crop, read, zoomLocation, zoomPallet, diag) }.isSuccess
             ui {
                 Toast.makeText(this, if (ok) "Saved${if (id.isNotEmpty()) " $id" else ""}" else "Could not save the scan", Toast.LENGTH_SHORT).show()
                 if (ok) backToSearch(2500)

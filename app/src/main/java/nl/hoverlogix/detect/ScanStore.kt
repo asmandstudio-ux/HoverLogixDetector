@@ -24,6 +24,7 @@ class LocationRead(val image: Bitmap, val read: LabelRead, val belongs: Boolean)
  *   scans/<time>/location_<n>.jpg      zoomed crops of the candidate location labels
  *   scans/<time>/scan.json             chosen location, barcodes and text read on the device
  *   scans/scans.jsonl                  one line per scan (same content as scan.json)
+ * scan.json "capture" records photo size, burst size, sharpness and label width for troubleshooting.
  * The crops can be sent on for server-side OCR and barcode decoding as they are.
  */
 object ScanStore {
@@ -35,7 +36,8 @@ object ScanStore {
 
     fun save(
         context: Context, locationId: String, selected: Int, locations: List<LocationRead>,
-        palletLabel: Bitmap?, palletRead: LabelRead?, zoomLocation: Float, zoomPallet: Float
+        palletLabel: Bitmap?, palletRead: LabelRead?, zoomLocation: Float, zoomPallet: Float,
+        diagnostics: JSONObject? = null
     ): File {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
         val dir = File(root(context), stamp).apply { mkdirs() }
@@ -48,6 +50,7 @@ object ScanStore {
             put("location_id", locationId)
             put("location_selected_candidate", selected)
             put("location_zoom", zoomLocation.toDouble())
+            if (diagnostics != null) put("capture", diagnostics)
             put("location_candidates", JSONArray().apply {
                 locations.forEachIndexed { i, l ->
                     write("location_$i.jpg", l.image)

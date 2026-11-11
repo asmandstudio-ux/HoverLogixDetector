@@ -148,4 +148,44 @@ object ScanLogic {
         val s = minWidth.toFloat() / cut.width
         return Bitmap.createScaledBitmap(cut, minWidth, (cut.height * s).toInt().coerceAtLeast(1), true)
     }
+
+    /**
+     * Sharpness of a crop: variance of the Laplacian on a small grey copy. Higher is sharper.
+     * Only comparable between photos of the same label.
+     */
+    fun sharpness(src: Bitmap): Double {
+        val w = min(320, src.width)
+        val h = max(8, (src.height.toLong() * w / src.width).toInt())
+        val bmp = if (w == src.width) src else Bitmap.createScaledBitmap(src, w, h, true)
+        val px = IntArray(bmp.width * bmp.height)
+        bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+        val g = IntArray(px.size) { i -> val c = px[i]; (((c shr 16) and 255) * 3 + ((c shr 8) and 255) * 6 + (c and 255)) / 10 }
+        var sum = 0.0
+        var sumSq = 0.0
+        var n = 0
+        val bw = bmp.width
+        for (y in 1 until bmp.height - 1) for (x in 1 until bw - 1) {
+            val i = y * bw + x
+            val lap = (4 * g[i] - g[i - 1] - g[i + 1] - g[i - bw] - g[i + bw]).toDouble()
+            sum += lap; sumSq += lap * lap; n++
+        }
+        if (n == 0) return 0.0
+        val mean = sum / n
+        return sumSq / n - mean * mean
+    }
+
+    /**
+     * Converts a normalised box from the live frame to the photo when the two have different
+     * aspect ratios (both show the full long side of the sensor).
+     */
+    fun toStillAspect(r: RectF, frameAspect: Float, stillAspect: Float): RectF {
+        if (abs(frameAspect - stillAspect) < 0.02f) return r
+        return if (stillAspect > frameAspect) {
+            val k = frameAspect / stillAspect
+            RectF(0.5f + (r.left - 0.5f) * k, r.top, 0.5f + (r.right - 0.5f) * k, r.bottom)
+        } else {
+            val k = stillAspect / frameAspect
+            RectF(r.left, 0.5f + (r.top - 0.5f) * k, r.right, 0.5f + (r.bottom - 0.5f) * k)
+        }
+    }
 }
