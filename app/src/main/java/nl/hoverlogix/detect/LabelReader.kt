@@ -22,7 +22,14 @@ data class ReadCode(val format: String, val value: String)
 /** What was read from one label crop. [engine] says which reader found the barcodes. */
 data class LabelRead(val codes: List<ReadCode>, val text: String, val engine: String) {
     /** Best single value for a location label: its barcode, else the printed text on one line. */
-    fun bestValue(): String = codes.firstOrNull()?.value ?: text.lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" ")
+    fun bestValue(): String = locationId() ?: text.lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" ")
+
+    /** A location ID from the barcode, or from printed text that looks like one ("AT 03 6C", "K172A"). */
+    fun locationId(): String? = codes.firstOrNull()?.value ?: LOCATION_ID.find(text.uppercase())?.value?.trim()
+
+    private companion object {
+        val LOCATION_ID = Regex("(?<![A-Z0-9])[A-Z]{1,3}[ -]?\\d{1,3}[ -]?\\d{1,2}[ -]?[A-Z](?![0-9])")
+    }
 }
 
 /**
@@ -40,13 +47,23 @@ object LabelReader {
     }
     private val textRecognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
+    /** Loads both readers so the first scan does not pay for it. Call once from a background thread. */
+    fun warmUp() {
+        val blank = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        runCatching { mlKitCodes(blank) }
+        runCatching { mlKitText(blank) }
+    }
+
     fun read(bmp: Bitmap, wantText: Boolean = true): LabelRead {
         var engine = "mlkit"
-        var codes = runCatching { mlKitCodes(bmp) }.getOrDefault(emptyList())
-        if (codes.isEmpty()) {
+        val ml = runCatching { mlKitCodes(bmp) }
+        var codes = ml.getOrDefault(emptyList())
+        // ZXing only when ML Kit cannot run on this device (no Google services); running both doubles the time.
+        if (ml.isFailure) {
             codes = runCatching { zxingCodes(bmp) }.getOrDefault(emptyList())
-            engine = if (codes.isEmpty()) "none" else "zxing"
+            engine = "zxing"
         }
+        if (codes.isEmpty()) engine = "none"
         val text = if (wantText) runCatching { mlKitText(bmp) }.getOrDefault("") else ""
         return LabelRead(codes.distinct(), text, engine)
     }

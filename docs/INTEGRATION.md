@@ -169,6 +169,12 @@ automatic. Otherwise the app switches lens, shows an aiming frame, and fires a b
 and steady (`aimAndBurst`); the sharpest photo that decodes is used. For the drone, use 4x to 6x optical zoom with the
 gimbal centring the label, so no aiming step is needed.
 
+Fast flow (build 9, phones without a reachable telephoto lens, e.g. S24 Ultra where Samsung exposes only 1.0x and 0.6x):
+`runScanFast` takes one photo without zoom and reads the location labels from it on a second thread while the camera
+zooms to the pallet label; it stops at the first pallet photo whose barcodes decode (at most 3) and zooms to the location
+labels only when the first photo gave no location ID (`LabelRead.locationId`: barcode, else text like "AT 03 6C").
+Every step is timed into `capture.timing_ms` in `scan.json`. Target: 3 to 5 s per pallet.
+
 Reading (`LabelReader`): ML Kit bundled barcode model, ZXing as fallback (pure Java, no Google services), ML Kit Latin OCR.
 Saved per scan (`ScanStore`, export from the home screen as `hoverlogix_scans_<date>.zip`):
 

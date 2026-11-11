@@ -70,6 +70,8 @@ class ScanActivity : AppCompatActivity() {
         const val BURST = 4
         /** Smallest pallet-label width in photo pixels at which barcodes are normally readable. */
         const val MIN_LABEL_PX = 300
+        /** Fast scan: most photos taken of the pallet label before giving up on its barcodes. */
+        const val MAX_PHOTOS = 3
         /** Highest total zoom (lens magnification x digital zoom) used for a label photo. */
         const val MAX_ZOOM = 8f
         /** Share of the picture width a label should fill after zooming. */
@@ -94,6 +96,7 @@ class ScanActivity : AppCompatActivity() {
     private lateinit var analysisExecutor: ExecutorService
     private lateinit var scanExecutor: ExecutorService
     private lateinit var captureExecutor: ExecutorService
+    private lateinit var workExecutor: ExecutorService
     private var imageCapture: ImageCapture? = null
     private var camera: Camera? = null
 
@@ -153,6 +156,8 @@ class ScanActivity : AppCompatActivity() {
         analysisExecutor = Executors.newSingleThreadExecutor()
         scanExecutor = Executors.newSingleThreadExecutor()
         captureExecutor = Executors.newSingleThreadExecutor()
+        workExecutor = Executors.newFixedThreadPool(2)
+        workExecutor.execute { LabelReader.warmUp() }
         confidence = Settings.confidence(this)
 
         autoScan.setOnCheckedChangeListener { _, on -> auto = on; stableFrames = 0 }
@@ -478,7 +483,7 @@ class ScanActivity : AppCompatActivity() {
         return cropBurst(stills, expected, cls, if (found.isEmpty()) 0f else margin, minWidth, aspect).filter { it.isNotEmpty() }
     }
 
-    private fun runScan(target: Detection, cands: List<LocationCandidate>, w: Int, h: Int) {
+    private fun runScanAimed(target: Detection, cands: List<LocationCandidate>, w: Int, h: Int) {
         try {
             val frameAspect = w.toFloat() / h
             val diag = JSONObject()
@@ -565,6 +570,115 @@ class ScanActivity : AppCompatActivity() {
         }
     }
 
+    private fun runScan(target: Detection, cands: List<LocationCandidate>, w: Int, h: Int) {
+        // Phones with a reachable telephoto lens use the aimed flow; all others the fast flow.
+        if (lenses.any { it.magnification >= 1.8f }) runScanAimed(target, cands, w, h) else runScanFast(target, cands, w, h)
+    }
+
+    /**
+     * Fast scan on the main lens, built to finish in a few seconds:
+     *  - one photo at once, without zoom; the location labels are read from it on a second thread
+     *  - meanwhile zoom to the pallet label and photograph it; more photos only if no barcode decodes
+     *  - zoom to the location labels only if the first photo gave no location ID
+     */
+    private fun runScanFast(target: Detection, cands: List<LocationCandidate>, w: Int, h: Int) {
+        val t0 = SystemClock.elapsedRealtime()
+        val timing = JSONObject()
+        fun lap(name: String, since: Long) { synchronized(timing) { timing.put(name, SystemClock.elapsedRealtime() - since) } }
+        try {
+            val frameAspect = w.toFloat() / h
+            val diag = JSONObject()
+            diag.put("lenses", JSONArray(lenses.map { "%.1fx".format(it.magnification) }))
+            val boxes = cands.map { ScanLogic.normalise(it.box, w, h) }
+            val labelBox = ScanLogic.normalise(target.box, w, h)
+
+            fun readLocations(stills: List<Still>, zoom: Float): List<LocationRead> {
+                val out = mutableListOf<LocationRead>()
+                cropBurst(stills, boxes.map { ScanLogic.zoomRect(it, zoom) }, ScanLogic.LOCATION_LABEL, 0.25f, 700, frameAspect)
+                    .forEachIndexed { i, shots ->
+                        val (img, read) = readBurst(shots) ?: return@forEachIndexed
+                        out += LocationRead(img, read, cands[i].belongs)
+                    }
+                return out
+            }
+            fun hasId(l: List<LocationRead>) = (l.filter { it.belongs }.ifEmpty { l }).any { it.read.locationId() != null }
+
+            // 1. One photo without zoom; location labels are read from it while the camera zooms.
+            ui { overlay.clear(); status.text = "Scanning. Hold steady…" }
+            var t = SystemClock.elapsedRealtime()
+            val wide = if (cands.isEmpty()) null else runCatching { grabStill() }.getOrNull()
+            lap("photo_wide", t)
+            val locationJob = workExecutor.submit(java.util.concurrent.Callable {
+                val s = SystemClock.elapsedRealtime()
+                val r: List<LocationRead> = if (wide == null) emptyList() else readLocations(listOf(wide), 1f)
+                lap("location_read", s)
+                r
+            })
+
+            // 2. Zoom to the pallet label. Stop at the first photo whose barcodes decode.
+            t = SystemClock.elapsedRealtime()
+            val zPal = zoomTo(labelBox)
+            lap("pallet_zoom_focus", t)
+            t = SystemClock.elapsedRealtime()
+            val expected = listOf(ScanLogic.zoomRect(labelBox, zPal))
+            val tried = mutableListOf<Pair<Shot, LabelRead>>()
+            var photoSize = ""
+            var source = "none"
+            for (attempt in 0 until MAX_PHOTOS) {
+                val still = runCatching { grabStill() }.getOrNull() ?: continue
+                photoSize = "${still.width}×${still.height}"; source = still.source
+                val shot = cropBurst(listOf(still), expected, ScanLogic.PALLET_LABEL, 0.06f, 0, frameAspect)[0].firstOrNull() ?: continue
+                val read = LabelReader.read(shot.crop, wantText = tried.isEmpty())
+                tried += shot to read
+                if (read.codes.isNotEmpty()) break
+            }
+            lap("pallet_photos_and_read", t)
+            val best = tried.firstOrNull { it.second.codes.isNotEmpty() } ?: tried.maxByOrNull { it.first.sharpness }
+            val text = tried.firstOrNull()?.second?.text ?: ""
+            val palletRead = best?.let { LabelRead(it.second.codes, it.second.text.ifEmpty { text }, it.second.engine) }
+
+            // 3. Location: use the first photo's result; zoom in on the labels only if it gave no ID.
+            var found = runCatching { locationJob.get(10, TimeUnit.SECONDS) }.getOrDefault(emptyList())
+            var zLoc = 1f
+            if (cands.isNotEmpty() && !hasId(found)) {
+                t = SystemClock.elapsedRealtime()
+                ui { status.text = "Zooming in on the location label…" }
+                val mine = cands.indices.filter { cands[it].belongs }.map { boxes[it] }.ifEmpty { boxes }
+                zLoc = zoomTo(ScanLogic.union(mine))
+                for (attempt in 0 until 2) {
+                    val still = runCatching { grabStill() }.getOrNull() ?: continue
+                    val again = readLocations(listOf(still), zLoc)
+                    if (again.isNotEmpty()) found = again
+                    if (hasId(found)) break
+                }
+                lap("location_zoomed", t)
+            }
+            resetZoom()
+
+            timing.put("total", SystemClock.elapsedRealtime() - t0)
+            diag.put("timing_ms", timing)
+            diag.put("photo_size", photoSize)
+            diag.put("photo_source", source)
+            diag.put("pallet_photos", tried.size)
+            diag.put("pallet_sharpness", JSONArray(tried.map { it.first.sharpness.toInt() }))
+            diag.put("pallet_label_px", best?.first?.crop?.width ?: 0)
+            diag.put("pallet_digital_zoom", zPal.toDouble())
+            diag.put("location_digital_zoom", zLoc.toDouble())
+            val secs = "%.1f".format(timing.optLong("total") / 1000.0)
+            val summary = "Scan took $secs s (wide photo ${timing.optLong("photo_wide")} ms, zoom+focus ${timing.optLong("pallet_zoom_focus")} ms, " +
+                "pallet photos+read ${timing.optLong("pallet_photos_and_read")} ms, location read ${timing.optLong("location_read")} ms" +
+                (if (timing.has("location_zoomed")) ", location zoomed ${timing.optLong("location_zoomed")} ms" else "") + ") · " +
+                "photo $photoSize ($source) · pallet ${"%.1f".format(zPal)}x, ${tried.size} photo${if (tried.size == 1) "" else "s"}, label ${best?.first?.crop?.width ?: 0} px · location ${"%.1f".format(zLoc)}x"
+            ui { showResult(found, best?.first?.crop, palletRead, zLoc, zPal, diag, summary) }
+        } catch (e: Exception) {
+            resetZoom()
+            ui {
+                Toast.makeText(this, "Scan failed: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                backToSearch(1500)
+            }
+        }
+    }
+
     private fun restoreMainLens() {
         resetZoom()
         switchLens(lenses.firstOrNull())
@@ -591,7 +705,7 @@ class ScanActivity : AppCompatActivity() {
         val cam = camera ?: return 1f
         val maxZoom = (cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 1f).coerceAtMost(8f)
         val zoom = ScanLogic.zoomFor(target, maxZoom)
-        runCatching { cam.cameraControl.setZoomRatio(zoom).get(2, TimeUnit.SECONDS) }
+        runCatching { cam.cameraControl.setZoomRatio(zoom).get(1, TimeUnit.SECONDS) }
         val display = previewView.display
         if (display != null) {
             val z = ScanLogic.zoomRect(target, zoom)
@@ -599,9 +713,9 @@ class ScanActivity : AppCompatActivity() {
                 .createPoint(z.centerX().coerceIn(0.05f, 0.95f), z.centerY().coerceIn(0.05f, 0.95f))
             val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
                 .setAutoCancelDuration(6, TimeUnit.SECONDS).build()
-            runCatching { cam.cameraControl.startFocusAndMetering(action).get(2500, TimeUnit.MILLISECONDS) }
+            runCatching { cam.cameraControl.startFocusAndMetering(action).get(900, TimeUnit.MILLISECONDS) }
         }
-        Thread.sleep(250)
+        Thread.sleep(100)
         return zoom
     }
 
@@ -778,5 +892,6 @@ class ScanActivity : AppCompatActivity() {
         analysisExecutor.shutdown()
         scanExecutor.shutdown()
         captureExecutor.shutdown()
+        workExecutor.shutdown()
     }
 }
